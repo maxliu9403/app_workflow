@@ -1,0 +1,13 @@
+{
+  "name": "双击屏幕",
+  "category": "自定义动作",
+  "icon": "🖱️",
+  "color": "#E67E22",
+  "description": "双击选区中心 (支持自定义间隔)",
+  "shortcuts": [
+      ["0.1", "间隔 0.1秒 (默认)"],
+      ["0.3", "间隔 0.3秒 (慢速)"],
+      ["0.05", "间隔 0.05秒 (极速)"]
+  ],
+  "python_code": "import time\nimport random\n\ndef action_double_click(runner, step, row_data):\n    \"\"\"\n    双击选中区域中心\n    \"\"\"\n    # 1. 获取屏幕分辨率\n    w, h = runner.device.window_size()\n\n    # 2. 解析坐标 (默认全屏)\n    coords = step.get('coords', {})\n    x1 = coords.get('x1', 0.0)\n    y1 = coords.get('y1', 0.0)\n    x2 = coords.get('x2', 1.0)\n    y2 = coords.get('y2', 1.0)\n\n    # 3. 计算像素坐标\n    cx = int((x1 + x2) / 2 * w)\n    cy = int((y1 + y2) / 2 * h)\n\n    # 4. 获取间隔参数 (默认 0.1s)\n    try:\n        interval = float(step.get('params', 0.1))\n    except:\n        interval = 0.1\n\n    # 5. 执行双击\n    runner.device.click(cx, cy)\n    time.sleep(interval)\n    runner.device.click(cx, cy)\n\n    return True"
+}

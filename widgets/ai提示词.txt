@@ -1,0 +1,50 @@
+# 🧩 Node Extension Standard for V7 Editor
+
+Use this document as a prompt for AI to generate compatible node extensions.
+
+## 1. Output Format (One-Click Import)
+The AI must output a **Single JSON Block** containing both metadata and the Python implementation.
+
+```json
+{
+  "name": "Click Center",
+  "category": "Custom Actions",
+  "icon": "🎯",
+  "color": "#FF9900",
+  "description": "Click the center of the screen",
+  "shortcuts": [
+      ["0.5", "Delay 0.5s"],
+      ["1.0", "Delay 1.0s"]
+  ],
+  "python_code": "def action_click_center(runner, step, row_data):\n    # Access runner.device, runner.ocr_engine\n    width, height = runner.device.window_size()\n    runner.device.click(width // 2, height // 2)\n    return True"
+}
+```
+
+## 2. Python Implementation Rules
+The `python_code` string must contain a **standalone function**.
+
+### Function Signature
+```python
+def your_function_name(runner, step, row_data):
+    """
+    Args:
+        runner: WorkflowRunner instance. Use runner.device for ADB.
+        step: Dict containing 'params', 'coords', etc.
+        row_data: Dict containing Excel variables.
+    Returns:
+        bool: True if successful, False otherwise.
+    """
+```
+
+### Available Objects
+- `runner.device`: ADB Device (adbutils). Methods: `click(x, y)`, `swipe(...)`, `send_keys(...)`.
+- `runner.ocr_engine`: OCR engine (if initialized).
+- `step['params']`: The text input from the UI.
+- `step['coords']`: The selected region `{'x1':..., 'y1':...}`.
+
+## 3. App Icon Implementation
+- **Standard**: Use an Emoji (e.g. "📱", "🚀") in the `"icon"` field.
+- **Advanced**: If you need a custom image, you can manually place a `.png` file in `icons/` and set `"icon": "icons/my_icon.png"`. (One-Click JSON currently supports text/emoji best).
+
+## 4. Prompt Example
+"Create a V7 Editor extension node called 'Clear Cache'. It should run the adb command `pm clear <package>`. The parameter input will be the package name. Shortcuts: 'com.example.app'."

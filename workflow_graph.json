@@ -1,0 +1,14 @@
+{
+  "version": "2.0",
+  "nodes": [
+    {
+      "id": "bbe28193-b27b-4022-9217-f3a33970a576",
+      "action_type": "Click Region",
+      "x": 272.0,
+      "y": 292.0,
+      "params": {},
+      "inputs": [],
+      "outputs": []
+    }
+  ]
+}

@@ -43,6 +43,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from extension_manager import ExtensionManager
 
 # 配置日志
 logging.basicConfig(
@@ -101,20 +102,46 @@ class WorkflowRunner:
         # 确保截图目录存在
         Path(self.ERROR_SCREENSHOT_DIR).mkdir(parents=True, exist_ok=True)
 
-        # 动作分发器映射表
+        # 动作分发器映射表 (V5.0 扩展)
         self._action_handlers: Dict[str, Callable] = {
+            # Interaction
             "Click Region": self._action_click_region,
             "Click Text": self._action_click_text,
-            "Input Text": self._action_input_text,
             "Swipe": self._action_swipe,
             "Long Press": self._action_long_press,
+            # Input (V5.0)
+            "Input Text (Base64)": self._action_input_text_base64,
+            "Input Text (Native)": self._action_input_text_native,
+            "Click & Check Keyboard": self._action_click_check_keyboard,
+            # Legacy
+            "Input Text": self._action_input_text,
+            # Vision
             "Check Text": self._action_check_text,
+            "Check Image": self._action_check_image,
             "Wait Text": self._action_wait_text,
             "Wait Element": self._action_wait_element,
-            "Wait Time": self._action_wait_time,
             "Assert Exists": self._action_assert_exists,
             "Wait Until Disappear": self._action_wait_until_disappear,
+            # System
+            "Wait Time": self._action_wait_time,
         }
+
+        # V7.9: Load Custom Actions
+        self.ext_manager = ExtensionManager()
+        self._load_custom_actions()
+        
+        # 逻辑节点列表 (不通过 handler 执行，在主循环中处理)
+        self._logic_actions = {
+            "IF (Check Text)", "IF (Check Image)", "ELSE", "END IF",
+            "LOOP (Count)", "LOOP (Until Text)", "BREAK", "END LOOP"
+        }
+        
+        # V5.0: 控制流状态
+        self._skip_mode = False
+        self._if_nest_level = 0
+        
+        # V6.0: 循环状态栈
+        self._loop_stack: List[Dict[str, Any]] = []
 
         logger.info(
             f"WorkflowRunner 初始化完成 | 屏幕: {self.phone_width}x{self.phone_height}"
@@ -123,7 +150,11 @@ class WorkflowRunner:
     # ==================== 核心公共方法 ====================
 
     def run_workflow(
-        self, json_path: str, row_data: Optional[Dict[str, Any]] = None
+        self,
+        json_path: str,
+        row_data: Optional[Dict[str, Any]] = None,
+        on_step_start: Callable[[int], None] = None, # (step_id) -> None
+        pause_event: Any = None # threading.Event
     ) -> bool:
         """
         执行整个工作流
@@ -131,6 +162,8 @@ class WorkflowRunner:
         Args:
             json_path: JSON 流程文件路径
             row_data: Excel 数据行（字典格式），用于变量替换
+            on_step_start: 步骤开始回调
+            pause_event: 暂停控制信号
 
         Returns:
             bool: 执行成功返回 True，失败返回 False
@@ -155,17 +188,126 @@ class WorkflowRunner:
         logger.info(f"📂 加载工作流: {json_path} | 共 {len(steps)} 个步骤")
         logger.info(f"📊 数据行: {row_data}")
 
-        # 2. 逐步执行
+        # 2. V5.0: 重置控制流状态
+        self._skip_mode = False
+        self._if_nest_level = 0
+        
+        # 3. 逐步执行（带控制流）
         total_steps = len(steps)
         failed_steps = []
 
         for idx, step in enumerate(steps, 1):
+             # 1. Check Pause
+            if pause_event:
+                while pause_event.is_set():
+                    time.sleep(0.1) # Wait while paused
+            
+            # 2. Callback UI
+            step_id = step.get("step_id", idx)
+            if on_step_start:
+                try:
+                    on_step_start(step_id)
+                except Exception:
+                    pass
+            
             step_id = step.get("step_id", idx)
             step_name = step.get("step_name", f"Step {idx}")
             action_type = step.get("action_type", "Unknown")
 
-            logger.info(f"▶️ [{idx}/{total_steps}] {step_name} | 动作: {action_type}")
+            # V5.0: 控制流处理
+            if action_type == "END IF":
+                self._if_nest_level = max(0, self._if_nest_level - 1)
+                if self._if_nest_level == 0:
+                    self._skip_mode = False
+                logger.info(f"🔀 [{idx}/{total_steps}] END IF (嵌套层级: {self._if_nest_level})")
+                continue
 
+            if action_type == "ELSE":
+                if self._if_nest_level == 1:
+                    self._skip_mode = not self._skip_mode
+                logger.info(f"↩️ [{idx}/{total_steps}] ELSE (跳过: {self._skip_mode})")
+                continue
+
+            if self._skip_mode:
+                logger.info(f"⏭️ [{idx}/{total_steps}] 跳过: {step_name}")
+                continue
+
+            # V5.0: IF 节点处理
+            if action_type in ("IF (Check Text)", "IF (Check Image)"):
+                self._if_nest_level += 1
+                condition_result = self._execute_if_condition(step, row_data, action_type)
+                if not condition_result:
+                    self._skip_mode = True
+                logger.info(f"❓ [{idx}/{total_steps}] IF 条件: {condition_result} (嵌套: {self._if_nest_level})")
+                continue
+
+            # V6.0: LOOP 节点处理
+            if action_type == "LOOP (Count)":
+                count = 5  # 默认循环5次
+                try:
+                    count = int(step.get("params", "5"))
+                except ValueError:
+                    pass
+                self._loop_stack.append({
+                    "start_idx": idx,
+                    "max_iter": min(count, 20),  # 安全上限
+                    "current": 0,
+                    "type": "count"
+                })
+                logger.info(f"🔁 [{idx}/{total_steps}] LOOP (Count={count})")
+                continue
+
+            if action_type == "LOOP (Until Text)":
+                target_text = step.get("params", "")
+                self._loop_stack.append({
+                    "start_idx": idx,
+                    "max_iter": 20,  # 安全上限
+                    "current": 0,
+                    "type": "until_text",
+                    "target": target_text
+                })
+                logger.info(f"🔁 [{idx}/{total_steps}] LOOP (Until Text: '{target_text}')")
+                continue
+
+            if action_type == "BREAK":
+                if self._loop_stack:
+                    # 找到对应的 END LOOP 并跳转
+                    loop_level = len(self._loop_stack)
+                    for scan_idx in range(idx, len(steps)):
+                        if steps[scan_idx].get("action_type") == "END LOOP":
+                            loop_level -= 1
+                            if loop_level == 0:
+                                idx = scan_idx  # 跳到 END LOOP
+                                break
+                    self._loop_stack.pop()
+                    logger.info(f"⏹️ [{idx}/{total_steps}] BREAK - 跳出循环")
+                continue
+
+            if action_type == "END LOOP":
+                if self._loop_stack:
+                    loop = self._loop_stack[-1]
+                    loop["current"] += 1
+                    
+                    continue_loop = False
+                    if loop["type"] == "count":
+                        continue_loop = loop["current"] < loop["max_iter"]
+                    elif loop["type"] == "until_text":
+                        # 检查目标文字是否出现
+                        found = self._action_check_text({"params": loop["target"]}, row_data)
+                        continue_loop = not found and loop["current"] < loop["max_iter"]
+                    
+                    if continue_loop:
+                        # 跳回循环开始
+                        logger.info(f"🔚 [{idx}/{total_steps}] END LOOP - 继续 (迭代 {loop['current']}/{loop['max_iter']})")
+                        idx = loop["start_idx"]
+                        continue
+                    else:
+                        self._loop_stack.pop()
+                        logger.info(f"🔚 [{idx}/{total_steps}] END LOOP - 结束")
+                continue
+
+            # 普通步骤执行
+            logger.info(f"▶️ [{idx}/{total_steps}] {step_name} | 动作: {action_type}")
             success = self.execute_step(step, row_data)
 
             if not success:
@@ -179,11 +321,12 @@ class WorkflowRunner:
                     logger.error(f"❌ 步骤 {step_id} 失败，工作流中断")
                     return False
 
-            # 动作间随机延迟（拟人化）
-            delay = random.uniform(*self.DEFAULT_ACTION_DELAY)
-            time.sleep(delay)
+            # V5.0: 全局人类延迟 (非逻辑节点)
+            if action_type not in self._logic_actions:
+                delay = random.uniform(1.0, 2.0)
+                time.sleep(delay)
 
-        # 3. 执行完成汇总
+        # 4. 执行完成汇总
         if failed_steps:
             logger.warning(
                 f"⚠️ 工作流完成，但有 {len(failed_steps)} 个可选步骤失败: {failed_steps}"
@@ -574,9 +717,21 @@ class WorkflowRunner:
     ) -> bool:
         """Check Text: OCR 检查屏幕文字是否存在（不阻塞）"""
         params = step.get("params", "")
+        
+        # V7.2: 解析操作符 (op:Contains|value)
+        operator = "Contains"
+        if params.startswith("op:"):
+            try:
+                parts = params.split("|", 1)
+                operator = parts[0].split(":")[1]
+                params = parts[1] if len(parts) > 1 else ""
+            except:
+                pass
+
         target_text = self._evaluate_expression(params, row_data)
 
-        if not target_text:
+        if not target_text and operator in ["Contains", "Equals"]:
+            # 对于 NotContains，空文本可能有不同含义，暂时不管
             logger.warning("⚠️ Check Text 需要指定目标文字")
             return False
 
@@ -590,16 +745,29 @@ class WorkflowRunner:
 
         try:
             result = self.ocr_engine(screenshot)
+            # 即使 result 为空 (OCR没识别到任何文字)，也要进行 NotContains 判断
+            all_text = ""
             if result:
                 all_text = " ".join(
                     item[1] for item in result if item and len(item) >= 2
                 )
-                if target_text in all_text:
-                    logger.info(f"✅ 找到文字: '{target_text}'")
-                    return True
-
-            logger.info(f"❌ 未找到文字: '{target_text}'")
-            return False
+            
+            is_match = False
+            if operator == "Contains":
+                is_match = target_text in all_text
+            elif operator == "NotContains":
+                is_match = target_text not in all_text
+            elif operator == "Equals":
+                is_match = target_text == all_text
+            elif operator == "NotEquals":
+                is_match = target_text != all_text
+            
+            if is_match:
+                logger.info(f"✅ 条件满足 ({operator}): '{target_text}'")
+                return True
+            else:
+                logger.info(f"❌ 条件未满足 ({operator}): '{target_text}'")
+                return False
 
         except Exception as e:
             logger.error(f"❌ OCR 检查失败: {e}")
@@ -689,6 +857,23 @@ class WorkflowRunner:
 
         return True
 
+    def _load_custom_actions(self):
+        """V7.9: Load custom functions from extension manager"""
+        try:
+            funcs = self.ext_manager.load_custom_functions()
+            mapping = self.ext_manager.load_actions_map()
+            
+            for action_name, func_name in mapping.items():
+                if func_name in funcs:
+                    func = funcs[func_name]
+                    # Bind runner (self) to the function
+                    self._action_handlers[action_name] = lambda s, r, f=func: f(self, s, r)
+            
+            if mapping:
+                logger.info(f"🧩 Loaded {len(mapping)} custom actions")
+        except Exception as e:
+            logger.error(f"❌ Failed to load custom actions: {e}")
+
     def _action_wait_until_disappear(
         self, step: Dict[str, Any], row_data: Dict[str, Any]
     ) -> bool:
@@ -736,6 +921,131 @@ class WorkflowRunner:
 
         logger.warning(f"⏰ 等待超时: '{target_text}' 仍然存在")
         return False
+
+    # ==================== V5.0 新增动作 ====================
+
+    def _execute_if_condition(
+        self, step: Dict[str, Any], row_data: Dict[str, Any], action_type: str
+    ) -> bool:
+        """V5.0: 执行 IF 条件检查"""
+        if action_type == "IF (Check Text)":
+            return self._action_check_text(step, row_data)
+        elif action_type == "IF (Check Image)":
+            return self._action_check_image(step, row_data)
+        return False
+
+    def _action_check_image(
+        self, step: Dict[str, Any], row_data: Dict[str, Any]
+    ) -> bool:
+        """Check Image: 模板匹配检查图片是否存在"""
+        params = step.get("params", "")
+        if not params:
+            logger.warning("⚠️ Check Image 需要指定模板路径")
+            return False
+        
+        # TODO: 实现模板匹配逻辑
+        logger.warning("⚠️ Check Image 功能待实现")
+        return False
+
+    def _action_input_text_base64(
+        self, step: Dict[str, Any], row_data: Dict[str, Any]
+    ) -> bool:
+        """V5.0: Input Text (Base64) - 通过 Magisk 剪贴板模块输入中文"""
+        import base64
+        
+        coords = step.get("coords", {})
+        params = step.get("params", "")
+        
+        # 变量替换/表达式求值
+        text_to_input = self._evaluate_expression(params, row_data)
+        
+        if not text_to_input:
+            logger.warning("⚠️ Input Text (Base64) 参数为空")
+            return True
+        
+        # 先点击目标区域（激活输入框）
+        if coords:
+            px, py = self._calculate_click_point(coords)
+            self.device.click(px, py)
+            time.sleep(0.5)
+        
+        # Base64 编码
+        b64_text = base64.b64encode(text_to_input.encode('utf-8')).decode('utf-8')
+        
+        # 使用 Magisk 剪贴板模块写入
+        try:
+            self.device.shell(f'set_clip -b "{b64_text}"')
+            time.sleep(0.3)
+            
+            # 粘贴 (KEYCODE_PASTE = 279)
+            self.device.shell("input keyevent 279")
+            
+            logger.info(f"⌨️ 输入文本 (Base64): '{text_to_input}'")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Input Text (Base64) 失败: {e}")
+            return False
+
+    def _action_input_text_native(
+        self, step: Dict[str, Any], row_data: Dict[str, Any]
+    ) -> bool:
+        """V5.0: Input Text (Native) - 原生 ADB 输入（仅支持英文/数字）"""
+        coords = step.get("coords", {})
+        params = step.get("params", "")
+        
+        text_to_input = self._evaluate_expression(params, row_data)
+        
+        if not text_to_input:
+            logger.warning("⚠️ Input Text (Native) 参数为空")
+            return True
+        
+        # 先点击目标区域
+        if coords:
+            px, py = self._calculate_click_point(coords)
+            self.device.click(px, py)
+            time.sleep(0.3)
+        
+        # 转义特殊字符
+        escaped = text_to_input.replace(" ", "%s").replace("&", "\\&").replace("'", "\\'")
+        self.device.shell(f"input text '{escaped}'")
+        
+        logger.info(f"📝 输入文本 (Native): '{text_to_input}'")
+        return True
+
+    def _action_click_check_keyboard(
+        self, step: Dict[str, Any], row_data: Dict[str, Any]
+    ) -> bool:
+        """V5.0: Click & Check Keyboard - 点击并验证键盘弹出"""
+        coords = step.get("coords", {})
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            # 计算点击坐标（带抖动）
+            px, py = self._calculate_click_point(coords, jitter=(attempt > 0))
+            
+            # 点击
+            self.device.click(px, py)
+            logger.info(f"⌨️ 点击坐标 ({px}, {py}) - 尝试 {attempt + 1}/{max_retries}")
+            
+            # 等待键盘弹出
+            time.sleep(1.0)
+            
+            # 检查键盘是否弹出
+            try:
+                output = self.device.shell("dumpsys input_method | grep mInputShown=true")
+                if "mInputShown=true" in output:
+                    logger.info("✅ 键盘已弹出")
+                    return True
+            except Exception as e:
+                logger.warning(f"⚠️ 键盘检测失败: {e}")
+            
+            if attempt < max_retries - 1:
+                logger.warning(f"⚠️ 键盘未弹出，准备重试...")
+                time.sleep(0.5)
+        
+        logger.error("❌ 键盘弹出验证失败，已达到最大重试次数")
+        raise RuntimeError("Keyboard did not appear after 3 attempts")
 
 
 # ==================== 便捷工厂函数 ====================

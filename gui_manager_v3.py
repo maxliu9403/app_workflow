@@ -14,9 +14,11 @@ from tkinter import filedialog, messagebox
 import tkinter as tk
 from tkinter import ttk
 
+
 import cv2
 from adbutils import adb
 from adbutils.errors import AdbError
+from extension_manager import ExtensionManager
 
 
 @dataclass
@@ -72,20 +74,98 @@ class WorkflowNode:
         }
 
 
-# 节点样式配置
-NODE_STYLES = {
-    "Click Region": {"color": "#4CAF50", "icon": "🖱️", "label": "点击区域"},
-    "Click Text": {"color": "#8BC34A", "icon": "🔤", "label": "点击文字"},
-    "Input Text": {"color": "#2196F3", "icon": "⌨️", "label": "输入文本"},
-    "Swipe": {"color": "#FF9800", "icon": "👆", "label": "滑动"},
-    "Long Press": {"color": "#FF5722", "icon": "👇", "label": "长按"},
-    "Wait Time": {"color": "#9C27B0", "icon": "⏱️", "label": "等待时间"},
-    "Wait Text": {"color": "#673AB7", "icon": "⏳", "label": "等待文字"},
-    "Wait Element": {"color": "#3F51B5", "icon": "🔍", "label": "等待元素"},
-    "Check Text": {"color": "#00BCD4", "icon": "✓", "label": "检查文字"},
-    "Check Image": {"color": "#009688", "icon": "🖼️", "label": "检查图片"},
-    "Assert Exists": {"color": "#F44336", "icon": "⚠️", "label": "断言存在"},
-    "Wait Until Disappear": {"color": "#E91E63", "icon": "👻", "label": "等待消失"},
+# V5.0: 分类节点配置
+ACTION_CATEGORIES = {
+    "👆 Interaction": {
+        "Click Region": {"icon": "🖱️", "color": "#4CAF50", "label": "点击区域"},
+        "Click Text": {"icon": "🔤", "color": "#8BC34A", "label": "点击文字"},
+        "Swipe": {"icon": "👆", "color": "#FF9800", "label": "滑动"},
+        "Long Press": {"icon": "👇", "color": "#FF5722", "label": "长按"},
+    },
+    "⌨️ Input": {
+        "Input Text (Base64)": {"icon": "⌨️", "color": "#2196F3", "label": "输入文本(中文)"},
+        "Input Text (Native)": {"icon": "📝", "color": "#03A9F4", "label": "输入文本(英文)"},
+        "Click & Check Keyboard": {"icon": "⌨️", "color": "#00BCD4", "label": "点击并验证键盘"},
+    },
+    "👁️ Vision": {
+        "Check Text": {"icon": "✓", "color": "#009688", "label": "检查文字"},
+        "Check Image": {"icon": "🖼️", "color": "#795548", "label": "检查图片"},
+        "Wait Text": {"icon": "⏳", "color": "#673AB7", "label": "等待文字"},
+        "Wait Element": {"icon": "🔍", "color": "#3F51B5", "label": "等待元素"},
+        "Assert Exists": {"icon": "⚠️", "color": "#F44336", "label": "断言存在"},
+        "Wait Until Disappear": {"icon": "👻", "color": "#E91E63", "label": "等待消失"},
+    },
+    "🔀 Logic": {
+        "IF (Check Text)": {"icon": "❓", "color": "#9C27B0", "label": "条件(文字)"},
+        "IF (Check Image)": {"icon": "❓", "color": "#7B1FA2", "label": "条件(图片)"},
+        "ELSE": {"icon": "↩️", "color": "#6A1B9A", "label": "否则"},
+        "END IF": {"icon": "⏹️", "color": "#4A148C", "label": "结束条件"},
+        # V6.0: LOOP 节点
+        "LOOP (Count)": {"icon": "🔁", "color": "#7C4DFF", "label": "循环(次数)"},
+        "LOOP (Until Text)": {"icon": "🔁", "color": "#651FFF", "label": "循环(直到文字)"},
+        "BREAK": {"icon": "⏹️", "color": "#D500F9", "label": "跳出循环"},
+        "END LOOP": {"icon": "🔚", "color": "#AA00FF", "label": "循环结束"},
+    },
+    "⚙️ System": {
+        "Wait Time": {"icon": "⏱️", "color": "#607D8B", "label": "等待时间"},
+    },
+}
+
+# 逻辑节点列表（不执行人类延迟）
+LOGIC_ACTIONS = {
+    "IF (Check Text)", "IF (Check Image)", "ELSE", "END IF",
+    "LOOP (Count)", "LOOP (Until Text)", "BREAK", "END LOOP"
+}
+
+# 兼容 V4: 扁平化 NODE_STYLES
+NODE_STYLES = {}
+for _cat, _actions in ACTION_CATEGORIES.items():
+    for _action_type, _style in _actions.items():
+        NODE_STYLES[_action_type] = _style
+
+# V7.6: 动作参数快捷键配置 (Value, Label/Comment)
+NODE_PARAM_SHORTCUTS = {
+    "Wait Time": [
+        ("1.0", "等待 1 秒"), ("2.0", "等待 2 秒"), ("3.0", "等待 3 秒"),
+        ("5.0", "等待 5 秒"), ("random(2,5)", "随机 2-5 秒")
+    ],
+    "Input Text (Base64)": [
+        ("Hello", "输入 Hello"), ("Test", "输入测试文本"), 
+        ("Username", "输入用户名"), ("Password", "输入密码"),
+        ("{clipboard}", "粘贴剪贴板")
+    ],
+    "Input Text (Native)": [
+        ("123", "输入数字"), ("abc", "输入字母")
+    ],
+    "Key Event": [
+        ("3", "Home键 (3)"), ("4", "返回键 (4)"), ("66", "回车键 (66)"),
+        ("26", "电源键 (26)"), ("61", "Tab键 (61)"), ("67", "退格键 (67)")
+    ],
+    "Click Text": [
+        ("Login", "登录"), ("Confirm", "确认"), ("Cancel", "取消"),
+        ("Next", "下一步"), ("Skip", "跳过"), ("Allow", "允许")
+    ],
+    "Wait Text": [
+        ("Home", "首页"), ("Loaded", "加载完毕"), ("Success", "成功")
+    ],
+    "IF (Check Text)": [
+        ("Error", "错误提示"), ("Success", "成功提示"), ("Fail", "失败提示")
+    ],
+    "Loop (Count)": [
+        ("3", "循环3次"), ("5", "循环5次"), ("10", "循环10次")
+    ],
+    "Swipe": [
+        ("0.5", "快滑 (0.5s)"), ("1.0", "标准 (1.0s)"), ("2.0", "慢滑 (2.0s)")
+    ],
+    "Long Press": [
+         ("1.0", "长按1秒"), ("3.0", "长按3秒")
+    ],
+    "Wait Element": [
+        ("timeout=10", "超时10秒"), ("timeout=30", "超时30秒")
+    ],
+    "Check Image": [
+        ("0.8", "相似度0.8"), ("0.9", "相似度0.9"), ("0.95", "相似度0.95")
+    ]
 }
 
 
@@ -151,7 +231,9 @@ class VintedAutomationConsole:
 
         # 步骤生成器相关变量
         self.gen_step_var = ctk.StringVar(value="Step 1")
-        self.gen_action_var = ctk.StringVar(value="Click Region (点击区域)")
+        self.gen_category_var = ctk.StringVar(value="👆 Interaction")  # V5.0: 类别选择
+        self.gen_action_var = ctk.StringVar(value="Click Region")  # V5.0: 动作选择
+        self.gen_operator_var = ctk.StringVar(value="包含 (Contains)") # V7.2: IF判断条件
         self.gen_param_var = ctk.StringVar(value="")
         self.gen_context_var = ctk.StringVar(value="")
         self.gen_x1_var = ctk.StringVar(value="0.000")
@@ -168,6 +250,8 @@ class VintedAutomationConsole:
         self.gen_canvas_offset_y: int = 0
         self.gen_display_width: int = 0
         self.gen_display_height: int = 0
+        self.excel_path: Optional[str] = None  # Custom Excel Path
+        self.orch_node_images: Dict[str, Any] = {} # Canvas Icon Cache
 
         # V3.1: 步骤队列系统
         self.gen_step_queue: List[Dict[str, Any]] = []  # 步骤队列
@@ -218,13 +302,240 @@ class VintedAutomationConsole:
         self.orch_prop_x2_var = ctk.StringVar(value="0.0")
         self.orch_prop_y2_var = ctk.StringVar(value="0.0")
 
+        self.gen_y2_var = ctk.StringVar(value="0")
+
+        self.gen_queue_var = ctk.StringVar()
+        
+        # V7.0: 绑定变量追踪，实现 Inspector -> Node 的实时更新
+        self._is_updating_ui = False
+        
+        self.gen_step_var.trace_add("write", self._on_inspector_change)
+        self.gen_action_var.trace_add("write", self._on_inspector_change)
+        self.gen_operator_var.trace_add("write", self._on_inspector_change)
+        self.gen_param_var.trace_add("write", self._on_inspector_change)
+        self.gen_x1_var.trace_add("write", self._on_inspector_change)
+        self.gen_y1_var.trace_add("write", self._on_inspector_change)
+        self.gen_x2_var.trace_add("write", self._on_inspector_change)
+        self.gen_y2_var.trace_add("write", self._on_inspector_change)
+        # Category change is handled by command callback which updates action list
+        
+        # V7.9: Extension Manager
+        self.ext_manager = ExtensionManager()
+        self._load_custom_nodes()
+
         self._build_ui()
         self.refresh_device_list()
         self.load_yaml()
+        
 
+        
         # V3.3: 启动时自动恢复
         self.root.after(500, self._gen_autoload)
 
+    def _load_custom_nodes(self):
+        """V7.9: Load Custom Extensions"""
+        nodes = self.ext_manager.load_nodes_metadata()
+        for node in nodes:
+            cat = node.get("category", "Custom")
+            name = node.get("name")
+            icon = node.get("icon", "🧩")
+            color = node.get("color", "#555")
+            shortcuts = node.get("shortcuts")
+            
+            if cat not in ACTION_CATEGORIES:
+                ACTION_CATEGORIES[cat] = {}
+            
+            ACTION_CATEGORIES[cat][name] = {"icon": icon, "color": color}
+            
+            # V7.9: Sync NODE_STYLES for Canvas Drawing
+            NODE_STYLES[name] = {"icon": icon, "color": color, "label": name}
+            
+            if shortcuts:
+                NODE_PARAM_SHORTCUTS[name] = shortcuts
+
+    def _update_inspector_visibility(self):
+        """根据动作类型显示/隐藏参数面板，并更新标签"""
+        action_type = self.gen_action_var.get()
+        
+        # 定义不需要坐标的动作集合 (黑名单模式)
+        no_coord_actions = {
+            "Input Text", "Input Text (Base64)", "Input Text (Native)", 
+            "Key Event", "Click Check Keyboard", "ADB Key",
+            "Wait", "Sleep", 
+            "Loop (Count)", "BREAK", "END LOOP", "ELSE", "END IF"
+        }
+        
+        # 1. 控制坐标区域显示
+        if hasattr(self, 'gen_coord_frame'):
+            # 如果动作类型包含 "Input" 或 "Key"，或者在黑名单中 -> 隐藏
+            # 但用户特指 Input Text 和 ADB Key 不需要，其他交互都需要
+            is_no_coord = False
+            for na in no_coord_actions:
+                if na in action_type:
+                    is_no_coord = True
+                    break
+            
+            if is_no_coord:
+                self.gen_coord_frame.grid_remove()
+            else:
+                self.gen_coord_frame.grid()
+                
+        # 3. 更新参数标签 (略)
+        
+        # 4. 更新快捷参数 (V7.6)
+        self._update_param_shortcuts(action_type)
+
+    def _update_param_shortcuts(self, action_type: str) -> None:
+        """V7.6: 根据动作类型刷新快捷参数按钮"""
+        if not hasattr(self, 'gen_shortcut_frame'):
+            return
+            
+        # 清除旧按钮
+        for widget in self.gen_shortcut_frame.winfo_children():
+            widget.destroy()
+
+        # 查找配置
+        shortcuts = NODE_PARAM_SHORTCUTS.get(action_type, [])
+        if not shortcuts:
+            # 尝试 default fallback
+            shortcuts = NODE_PARAM_SHORTCUTS.get("default", [])
+        
+        # Grid 配置 (2列)
+        self.gen_shortcut_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        # 创建新按钮
+        for i, (val, label) in enumerate(shortcuts):
+            # 使用闭包绑定值
+            def set_val(v=val):
+                self.gen_param_var.set(v)
+            
+            # 显示格式: 中文注释 (真实值)
+            display_val = val
+            if len(display_val) > 12:
+                display_val = display_val[:10] + ".."
+            
+            full_text = f"{label} ({display_val})"
+            
+            btn = ctk.CTkButton(
+                self.gen_shortcut_frame,
+                text=full_text,
+                height=28,
+                fg_color="#444",
+                hover_color="#555",
+                font=ctk.CTkFont(size=11),
+                command=set_val
+            )
+            # 2列布局
+            btn.grid(row=i // 2, column=i % 2, padx=2, pady=2, sticky="ew")
+
+        # 2. 控制判断条件显示 (仅 IF 节点)
+        if hasattr(self, 'gen_operator_combo'):
+            if action_type.startswith("IF"):
+                self.gen_operator_combo.grid()
+                if hasattr(self, 'gen_operator_label'):
+                    self.gen_operator_label.grid()
+            else:
+                self.gen_operator_combo.grid_remove()
+                if hasattr(self, 'gen_operator_label'):
+                    self.gen_operator_label.grid_remove()
+
+        # 3. 动态更新参数标签
+        param_label_text = "动作参数："
+        if "Wait" in action_type or "Sleep" in action_type:
+            param_label_text = "等待时间 (秒)："
+        elif "Loop (Count)" in action_type:
+            param_label_text = "循环次数："
+        elif "Input" in action_type:
+            param_label_text = "输入内容："
+        elif "Click Text" in action_type or "Check Text" in action_type:
+            param_label_text = "目标文本："
+        elif "Check Image" in action_type:
+            param_label_text = "模板文件名："
+
+        if hasattr(self, 'gen_param_label'):
+            self.gen_param_label.configure(text=param_label_text)
+
+        # V7.9: Toggle Image Browse Button
+        if hasattr(self, 'gen_param_browse_btn'):
+            if "Image" in action_type:
+                self.gen_param_browse_btn.grid()
+            else:
+                self.gen_param_browse_btn.grid_remove()
+
+    def _on_inspector_change(self, *args):
+        """Inspector 变量改变时更新选中节点"""
+        # 更新可见性 (总是执行)
+        self._update_inspector_visibility()
+
+        if self._is_updating_ui:
+            return
+            
+        if not self.orch_selected_node:
+            return
+            
+        node = self.orch_nodes.get(self.orch_selected_node)
+        if not node:
+            return
+            
+        # 更新节点数据
+        try:
+            node.step_name = self.gen_step_var.get()
+            node.action_type = self.gen_action_var.get()
+            
+            # V7.2: IF 节点参数编码 (op:Contains|value)
+            raw_param = self.gen_param_var.get()
+            if node.action_type.startswith("IF"):
+                op_val = self.gen_operator_var.get()
+                op_map = {
+                    "包含 (Contains)": "Contains",
+                    "不包含 (Not Contains)": "NotContains",
+                    "等于 (Equals)": "Equals",
+                    "不等于 (Not Equals)": "NotEquals"
+                }
+                simple_op = op_map.get(op_val, "Contains")
+                node.params = f"op:{simple_op}|{raw_param}"
+            else:
+                node.params = raw_param
+            
+            # 更新坐标
+            try:
+                node.coords = {
+                    "x1": float(self.gen_x1_var.get() or 0),
+                    "y1": float(self.gen_y1_var.get() or 0),
+                    "x2": float(self.gen_x2_var.get() or 0),
+                    "y2": float(self.gen_y2_var.get() or 0)
+                }
+            except ValueError:
+                pass # 忽略无效数字输入
+            
+            # 获取 AI 上下文 (Textbox 需要特殊处理)
+            if hasattr(self, 'gen_context_text'):
+                # 暂时存入 params 的 _context 字段用于持久化
+                # 这里可能需要更完善的 params 结构，目前先简化
+                pass
+
+            # 重绘节点
+            self._orch_draw_node(node)
+            self._orch_refresh_listbox()
+            
+        except Exception as e:
+            print(f"Error updating node: {e}")
+
+    def _on_inspector_text_change(self, event=None):
+        """Inspector 文本框(AI Context)改变时更新选中节点"""
+        if self._is_updating_ui:
+            return
+            
+        if not self.orch_selected_node:
+            return
+            
+        node = self.orch_nodes.get(self.orch_selected_node)
+        if hasattr(self, 'gen_context_text'):
+            new_context = self.gen_context_text.get("1.0", tk.END).strip()
+            if node.context != new_context:
+                node.context = new_context
+                # 不需要重绘，因为 context 不显示在节点上
+    
     def _resolve_default_yaml_path(self) -> Path:
         preferred = Path(r"d:\Carousell_Auto\config\coordinates.yaml")
         if preferred.exists():
@@ -303,13 +614,11 @@ class VintedAutomationConsole:
 
         self.tab_live = self.tabs.add("实时调试")
         self.tab_log = self.tabs.add("日志回放")
-        self.tab_generator = self.tabs.add("步骤生成器")
-        self.tab_orchestrator = self.tabs.add("流程编排")
+        self.tab_designer = self.tabs.add("🛠️ 工作流设计器")  # V6.0: 统一设计器
 
         self._build_live_tab()
         self._build_log_tab()
-        self._build_generator_tab()
-        self._build_orchestrator_tab()
+        self._build_designer_tab()  # V6.0: 合并 Generator + Orchestrator
 
         self._building_ui = False
 
@@ -753,110 +1062,445 @@ class VintedAutomationConsole:
         self.btn_next = ctk.CTkButton(bottom, text="下一张", command=lambda: self.step_log(1))
         self.btn_next.grid(row=0, column=2, sticky="ew", padx=10, pady=10)
 
-    def _build_generator_tab(self) -> None:
-        """构建步骤生成器 Tab 页面 - 左-中-右布局"""
-        self.tab_generator.grid_rowconfigure(0, weight=1)
-        self.tab_generator.grid_columnconfigure(0, weight=2)   # 左：参数配置
-        self.tab_generator.grid_columnconfigure(1, weight=5)   # 中：画布
-        self.tab_generator.grid_columnconfigure(2, weight=3)   # 右：输出与操作
+    def _build_designer_tab(self) -> None:
+        """V6.0: 构建统一工作流设计器 Tab 页面 - 左-中-右布局
+        
+        左栏 (Inspector): 步骤配置、参数输入、变量按钮
+        中栏 (Viewport): 截图画布、坐标显示
+        右栏 (Outliner): 步骤队列、编辑控制、导入导出
+        """
+        self.tab_designer.grid_rowconfigure(0, weight=1)
+        self.tab_designer.grid_columnconfigure(0, weight=2)   # 左：节点库+配置 (20%)
+        self.tab_designer.grid_columnconfigure(1, weight=4)   # 中：节点画布 (40%)
+        self.tab_designer.grid_columnconfigure(2, weight=2)   # 中右：控制面板 (20%)
+        self.tab_designer.grid_columnconfigure(3, weight=2)   # 右：截图预览 (20%)
 
-        # ==================== 左侧：参数配置区 ====================
-        left_panel = ctk.CTkScrollableFrame(self.tab_generator)
-        left_panel.grid(row=0, column=0, sticky="nsew", padx=(10, 5), pady=10)
-        left_panel.grid_columnconfigure(0, weight=1)
+        # V7.10: Canvas Expand State
+        self._canvas_expanded = False
+        self._hidden_panels = [] # Stores hidden panel references
+
+        # ==================== 左侧：Inspector 参数配置区 ====================
+        # V7.8: 紧凑布局, CTkFrame (无滚动), Pad减少
+        self.left_panel = ctk.CTkFrame(self.tab_designer)
+        self.left_panel.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        self.left_panel.grid_columnconfigure(0, weight=1)
+
+        # === 节点库 (快速添加) ===
+        palette_frame = ctk.CTkFrame(self.left_panel)
+        palette_frame.grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        palette_frame.grid_columnconfigure(0, weight=1)
+
+        header_frame = ctk.CTkFrame(palette_frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+        
+        ctk.CTkLabel(header_frame, text="🧩 节点", font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=5)
+        
+        ctk.CTkButton(header_frame, text="✨ 扩展", width=60, height=24, fg_color="#6C5CE7", hover_color="#5849BE", font=ctk.CTkFont(size=12, weight="bold"), command=self._show_extension_import).pack(side="right", padx=5)
+
+        # 生成节点按钮
+        node_btn_frame = ctk.CTkFrame(palette_frame, fg_color="transparent")
+        node_btn_frame.grid(row=1, column=0, sticky="ew", padx=1, pady=1)
+        
+        col = 0
+        # V7.9: 美化节点图标 (正方形, 圆角, 更大图标, 图片支持)
+        for category, actions in ACTION_CATEGORIES.items():
+            for action_type, style in list(actions.items())[:3]:  # 保持常用显示
+                icon_val = style.get('icon', '?')
+                image_obj = None
+                text_val = icon_val
+                
+                # App Icon Support (File-based)
+                if isinstance(icon_val, str) and icon_val.lower().endswith(('.png', '.jpg')):
+                     try:
+                         if Path(icon_val).exists():
+                             pil_img = Image.open(icon_val)
+                             image_obj = ctk.CTkImage(light_image=pil_img, size=(32, 32))
+                             text_val = ""
+                     except Exception:
+                         pass
+
+                btn = ctk.CTkButton(
+                    node_btn_frame,
+                    text=text_val,
+                    image=image_obj,
+                    width=52, height=52,
+                    corner_radius=8,   # 现代圆角正方形
+                    border_width=0,
+                    font=ctk.CTkFont(family="Segoe UI Emoji", size=26), # 确保 Emoji 清晰
+                    fg_color=style["color"],
+                    command=lambda a=action_type: self._add_node_to_canvas(a),
+                )
+                if image_obj:
+                    btn.image = image_obj # GC Shield
+
+                btn.grid(row=col // 5, column=col % 5, padx=3, pady=3)
+                col += 1
 
         # Step 序号
-        step_frame = ctk.CTkFrame(left_panel)
-        step_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
+        step_frame = ctk.CTkFrame(self.left_panel)
+        step_frame.grid(row=1, column=0, sticky="ew", padx=2, pady=2)
         step_frame.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
             step_frame,
-            text="📌 步骤配置",
-            font=ctk.CTkFont(size=15, weight="bold"),
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 8))
+            text="📌 配置",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=2)
 
-        ctk.CTkLabel(step_frame, text="Step 序号：").grid(row=1, column=0, sticky="w", padx=10, pady=6)
+        ctk.CTkLabel(step_frame, text="序号:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
         self.gen_step_entry = ctk.CTkEntry(step_frame, textvariable=self.gen_step_var, width=120)
-        self.gen_step_entry.grid(row=1, column=1, sticky="ew", padx=10, pady=6)
+        self.gen_step_entry.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
 
-        # 动作类型下拉菜单
-        ctk.CTkLabel(step_frame, text="动作类型：").grid(row=2, column=0, sticky="w", padx=10, pady=6)
+        # V5.0: 类别下拉菜单
+        ctk.CTkLabel(step_frame, text="类别:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+        self.gen_category_combo = ctk.CTkComboBox(
+            step_frame,
+            variable=self.gen_category_var,
+            values=list(ACTION_CATEGORIES.keys()),
+            width=220,
+            command=self._on_gen_category_change,
+        )
+        self.gen_category_combo.grid(row=2, column=1, sticky="ew", padx=5, pady=2)
+
+        # V5.0: 动作下拉菜单
+        ctk.CTkLabel(step_frame, text="动作:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+        first_category = list(ACTION_CATEGORIES.keys())[0]
+        first_actions = list(ACTION_CATEGORIES[first_category].keys())
         self.gen_action_combo = ctk.CTkComboBox(
             step_frame,
             variable=self.gen_action_var,
-            values=[
-                "Click Region (点击区域)",
-                "Input Text (输入文本)",
-                "Swipe (滑动屏幕)",
-                "Check Text (检查文字存在)",
-                "Check Image (检查图片存在)",
-                "Wait Element (等待元素出现)",
-                "Long Press (长按区域)",
-                "Assert Exists (断言存在-报错)",
-                "Wait Until Disappear (等待消失)",
-                "Click Text (点击文字锚点)",
-                "Wait Text (等待文字出现)",
-            ],
+            values=first_actions,
             width=220,
         )
-        self.gen_action_combo.grid(row=2, column=1, sticky="ew", padx=10, pady=6)
+        self.gen_action_combo.grid(row=3, column=1, sticky="ew", padx=5, pady=2)
 
         # 动作参数
-        param_frame = ctk.CTkFrame(left_panel)
-        param_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
-        param_frame.grid_columnconfigure(1, weight=1)
+        self.gen_param_frame = ctk.CTkFrame(self.left_panel)
+        self.gen_param_frame.grid(row=2, column=0, sticky="ew", padx=2, pady=2)
+        self.gen_param_frame.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
-            param_frame,
-            text="📝 动作参数",
-            font=ctk.CTkFont(size=15, weight="bold"),
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 8))
+            self.gen_param_frame,
+            text="📝 参数",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=2)
 
-        ctk.CTkLabel(param_frame, text="文本/超时：").grid(row=1, column=0, sticky="w", padx=10, pady=6)
-        self.gen_param_entry = ctk.CTkEntry(
-            param_frame,
-            textvariable=self.gen_param_var,
-            placeholder_text="如 'sneakers' 或 'timeout=10'",
+        # V7.6: 快捷参数 (Top)
+        self.gen_shortcut_label = ctk.CTkLabel(self.gen_param_frame, text="推荐:", font=ctk.CTkFont(size=11))
+        self.gen_shortcut_label.grid(row=1, column=0, sticky="w", padx=5, pady=0)
+        
+        self.gen_shortcut_frame = ctk.CTkFrame(self.gen_param_frame, fg_color="transparent")
+        self.gen_shortcut_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=2, pady=0)
+
+        # 判断条件
+        self.gen_operator_label = ctk.CTkLabel(self.gen_param_frame, text="条件:")
+        self.gen_operator_label.grid(row=3, column=0, sticky="w", padx=5, pady=2)
+        
+        self.gen_operator_combo = ctk.CTkComboBox(
+            self.gen_param_frame,
+            variable=self.gen_operator_var,
+            values=["包含", "不包含", "等于", "不等于"],
+            width=220,
         )
-        self.gen_param_entry.grid(row=1, column=1, sticky="ew", padx=10, pady=6)
+        self.gen_operator_combo.grid(row=3, column=1, sticky="ew", padx=5, pady=2)
+        self.gen_operator_combo.grid_remove() # 默认隐藏
+        self.gen_operator_label.grid_remove()
 
-        ctk.CTkLabel(param_frame, text="AI 备注：").grid(row=2, column=0, sticky="nw", padx=10, pady=6)
-        self.gen_context_text = ctk.CTkTextbox(param_frame, height=80, font=ctk.CTkFont(size=12))
-        self.gen_context_text.grid(row=2, column=1, sticky="ew", padx=10, pady=6)
+        self.gen_param_label = ctk.CTkLabel(self.gen_param_frame, text="值:")
+        self.gen_param_label.grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        self.gen_param_entry = ctk.CTkEntry(
+            self.gen_param_frame,
+            textvariable=self.gen_param_var,
+            placeholder_text="Enter value...",
+        )
+        self.gen_param_entry.grid(row=4, column=1, sticky="ew", padx=(5, 35), pady=2)
+        
+        self.gen_param_browse_btn = ctk.CTkButton(
+            self.gen_param_frame, text="📂", width=30, height=24, fg_color="#444",
+            command=self._browse_param_image
+        )
+        self.gen_param_browse_btn.grid(row=4, column=1, sticky="e", padx=2, pady=2)
+        self.gen_param_browse_btn.grid_remove() # Default hidden
 
-        # 坐标显示区
-        coord_frame = ctk.CTkFrame(left_panel)
-        coord_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
-        coord_frame.grid_columnconfigure((1, 3), weight=1)
+        ctk.CTkLabel(self.gen_param_frame, text="备注:").grid(row=5, column=0, sticky="nw", padx=5, pady=2)
+        self.gen_context_text = ctk.CTkTextbox(self.gen_param_frame, height=50, font=ctk.CTkFont(size=12))
+        self.gen_context_text.grid(row=5, column=1, sticky="ew", padx=5, pady=2)
+
+        # V6.0: 变量快捷插入行
+        var_label_frame = ctk.CTkFrame(self.gen_param_frame, fg_color="transparent")
+        var_label_frame.grid(row=6, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
+        
+        ctk.CTkLabel(var_label_frame, text="变量:", font=ctk.CTkFont(size=11)).pack(side="left")
+        ctk.CTkButton(
+            var_label_frame, text="📂", width=24, height=20, fg_color="#444",
+            command=self._select_excel_path
+        ).pack(side="left", padx=5)
+        ctk.CTkButton(
+            var_label_frame, text="{x}", width=40, height=20, fg_color="#555",
+            command=self._show_variable_menu
+        ).pack(side="right")
+        
+        # 变量按钮容器
+        self.gen_var_frame = ctk.CTkFrame(self.gen_param_frame, fg_color="#2a2a2a")
+        self.gen_var_frame.grid(row=7, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
+        
+        # 初始化变量按钮
+        self._load_variable_buttons()
+
+
+
+
+
+        # 提示标签
+        self.orch_hint_label = ctk.CTkLabel(
+            self.left_panel,
+            text="点击节点查看属性",
+            text_color="#888888",
+            font=ctk.CTkFont(size=11),
+        )
+        self.orch_hint_label.grid(row=5, column=0, sticky="ew", padx=10, pady=(10, 20))
+
+        # ==================== 中间：节点画布区 (Viewport) ====================
+        self.center_panel = ctk.CTkFrame(self.tab_designer)
+        self.center_panel.grid(row=0, column=1, sticky="nsew", padx=5, pady=10)
+        self.center_panel.grid_rowconfigure(1, weight=1)  # 节点画布占满
+        self.center_panel.grid_columnconfigure(0, weight=1)
+
+        # === 节点画布区域 ===
+        node_header = ctk.CTkFrame(self.center_panel, fg_color="transparent")
+        node_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        node_header.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
-            coord_frame,
-            text="📍 目标坐标（百分比）",
-            font=ctk.CTkFont(size=15, weight="bold"),
+            node_header,
+            text="🎨 工作流画布 (拖拽节点)",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, sticky="w")
+        
+        # V7.10: Expand Button
+        self.expand_btn = ctk.CTkButton(
+            node_header, text="↕ 展开", width=60, height=24, fg_color="#555",
+            command=self._toggle_canvas_expand
+        )
+        self.expand_btn.grid(row=0, column=1, sticky="e")
+
+        # 节点画布 (使用 orch_canvas)
+        canvas_container = ctk.CTkFrame(self.center_panel)
+        canvas_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
+        canvas_container.grid_rowconfigure(0, weight=1)
+        canvas_container.grid_columnconfigure(0, weight=1)
+        
+        self.orch_canvas = tk.Canvas(canvas_container, bg="#1e1e1e", highlightthickness=0)
+        self.orch_canvas.grid(row=0, column=0, sticky="nsew")
+        
+        # 滚动条
+        h_scroll = tk.Scrollbar(canvas_container, orient="horizontal", command=self.orch_canvas.xview)
+        v_scroll = tk.Scrollbar(canvas_container, orient="vertical", command=self.orch_canvas.yview)
+        h_scroll.grid(row=1, column=0, sticky="ew")
+        v_scroll.grid(row=0, column=1, sticky="ns")
+        self.orch_canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
+        
+        # 画布事件绑定
+        self.orch_canvas.bind("<Button-1>", self._orch_on_canvas_click)
+        self.orch_canvas.bind("<B1-Motion>", self._orch_on_canvas_drag)
+        self.orch_canvas.bind("<ButtonRelease-1>", self._orch_on_canvas_release)
+        self.orch_canvas.bind("<Double-Button-1>", self._orch_on_canvas_double_click)
+        self.orch_canvas.bind("<ButtonPress-2>", self._orch_on_canvas_pan_start)
+        self.orch_canvas.bind("<B2-Motion>", self._orch_on_canvas_pan_drag)
+        self.orch_canvas.bind("<Control-ButtonPress-1>", self._orch_on_canvas_pan_start)
+        self.orch_canvas.bind("<Control-B1-Motion>", self._orch_on_canvas_pan_drag)
+        
+        self._orch_draw_grid()
+
+        # ==================== 最右侧：截图预览区 (独立面板) ====================
+        self.screenshot_panel = ctk.CTkFrame(self.tab_designer)
+        self.screenshot_panel.grid(row=0, column=3, sticky="nsew", padx=(5, 10), pady=10)
+        self.screenshot_panel.grid_rowconfigure(1, weight=1)
+        self.screenshot_panel.grid_columnconfigure(0, weight=1)
+
+        # 标题和刷新按钮
+        screenshot_header = ctk.CTkFrame(self.screenshot_panel, fg_color="transparent")
+        screenshot_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        screenshot_header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            screenshot_header,
+            text="📱 设备截图 (1080x2400)",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, sticky="w")
+
+        self.btn_gen_refresh = ctk.CTkButton(
+            screenshot_header,
+            text="📷 刷新",
+            width=70,
+            height=28,
+            fg_color="#3498db",
+            command=self.refresh_gen_screenshot,
+        )
+        self.btn_gen_refresh.grid(row=0, column=1, sticky="e")
+
+        # 截图画布 (全高度，保持手机比例 9:20)
+        self.gen_canvas = ctk.CTkCanvas(self.screenshot_panel, bg="#1f1f1f", highlightthickness=0)
+        self.gen_canvas.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.gen_canvas.bind("<Button-1>", self.on_gen_canvas_press)
+        self.gen_canvas.bind("<B1-Motion>", self.on_gen_canvas_drag)
+        self.gen_canvas.bind("<ButtonRelease-1>", self.on_gen_canvas_release)
+        self.gen_canvas.bind("<Configure>", lambda _e: self.redraw_gen_screenshot())
+
+        self.gen_canvas.create_text(
+            20, 50,
+            text="请先连接设备\n然后点击「刷新」",
+            fill="#9a9a9a",
+            anchor="nw",
+            font=("Arial", 12),
+            tags="placeholder",
+        )
+
+        # ==================== 右侧 (中右)：工作流控制区 ====================
+        self.control_panel = ctk.CTkFrame(self.tab_designer)
+        self.control_panel.grid(row=0, column=2, sticky="nsew", padx=5, pady=10)
+        self.control_panel.grid_rowconfigure(2, weight=1)  # 节点列表可扩展
+        self.control_panel.grid_columnconfigure(0, weight=1)
+
+        # === 工作流操作按钮 (第一行) ===
+        action_frame = ctk.CTkFrame(self.control_panel)
+        action_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
+        action_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        ctk.CTkLabel(
+            action_frame,
+            text="🎮 工作流控制",
+            font=ctk.CTkFont(size=14, weight="bold"),
         ).grid(row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(10, 8))
 
-        ctk.CTkLabel(coord_frame, text="X1：").grid(row=1, column=0, sticky="w", padx=10, pady=4)
-        ctk.CTkEntry(coord_frame, textvariable=self.gen_x1_var, width=80, state="readonly").grid(
+        # 第一行按钮
+        ctk.CTkButton(
+            action_frame, text="▶️ 运行全部", fg_color="#27ae60", height=32,
+            command=self._orch_run_all
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=(10, 3), pady=3)
+
+        ctk.CTkButton(
+            action_frame, text="🔴 断点调试", fg_color="#e74c3c", height=32,
+            command=self._orch_run_with_breakpoints
+        ).grid(row=1, column=2, columnspan=2, sticky="ew", padx=(3, 10), pady=3)
+
+        # 第二行按钮
+        ctk.CTkButton(
+            action_frame, text="🧪 单点测试", fg_color="#3498db", height=32,
+            command=self._orch_test_selected_node
+        ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=(10, 3), pady=3)
+
+        ctk.CTkButton(
+            action_frame, text="🗑️ 清空画布", fg_color="#7f8c8d", height=32,
+            command=self._orch_clear_canvas
+        ).grid(row=2, column=2, columnspan=2, sticky="ew", padx=(3, 10), pady=3)
+
+        # === 文件操作 ===
+        file_frame = ctk.CTkFrame(self.control_panel)
+        file_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+        file_frame.grid_columnconfigure((0, 1), weight=1)
+
+        ctk.CTkLabel(
+            file_frame,
+            text="📁 流程文件",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 8))
+
+        ctk.CTkButton(
+            file_frame, text="📂 加载流程", fg_color="#555", height=30,
+            command=self._orch_import_json
+        ).grid(row=1, column=0, sticky="ew", padx=(10, 3), pady=(0, 6))
+
+        ctk.CTkButton(
+            file_frame, text="💾 保存流程", fg_color="#555", height=30,
+            command=self._orch_export_json
+        ).grid(row=1, column=1, sticky="ew", padx=(3, 10), pady=(0, 6))
+
+        # V7.5: 节点操作按钮 (断开连接 + 测试点击)
+        node_op_frame = ctk.CTkFrame(file_frame, fg_color="transparent")
+        node_op_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=5, pady=(0, 6))
+        node_op_frame.grid_columnconfigure((0, 1), weight=1)
+
+        ctk.CTkButton(
+            node_op_frame, text="🔌 断开连接", fg_color="#e67e22", height=30,
+            command=self._orch_disconnect_selected_node_all
+        ).grid(row=0, column=0, sticky="ew", padx=3)
+
+        ctk.CTkButton(
+            node_op_frame, text="👆 测试点击", fg_color="#2980b9", height=30,
+            command=self._orch_test_click_region
+        ).grid(row=0, column=1, sticky="ew", padx=3)
+
+        # === 节点列表区 ===
+        node_list_frame = ctk.CTkFrame(self.control_panel)
+        node_list_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 6))
+        node_list_frame.grid_rowconfigure(1, weight=1)
+        node_list_frame.grid_columnconfigure(0, weight=1)
+
+        list_header = ctk.CTkFrame(node_list_frame, fg_color="transparent")
+        list_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+        list_header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            list_header, text="📋 节点列表", font=ctk.CTkFont(size=13, weight="bold")
+        ).grid(row=0, column=0, sticky="w")
+
+        ctk.CTkButton(
+            list_header, text="🔗 自动连接", width=70, height=24, fg_color="#555",
+            command=self._orch_auto_connect
+        ).grid(row=0, column=1, sticky="e", padx=2)
+
+        # 节点列表 Listbox
+        list_container = ctk.CTkFrame(node_list_frame)
+        list_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        list_container.grid_rowconfigure(0, weight=1)
+        list_container.grid_columnconfigure(0, weight=1)
+
+        self.gen_queue_listbox = tk.Listbox(
+            list_container, bg="#2a2a2a", fg="#ffffff",
+            selectbackground="#3498db", font=("Consolas", 10), height=10
+        )
+        self.gen_queue_listbox.grid(row=0, column=0, sticky="nsew")
+        self.gen_queue_listbox.bind("<<ListboxSelect>>", self._on_node_list_select)
+        self.gen_queue_listbox.bind("<Double-1>", self._gen_on_queue_double_click)
+        
+        # 滚动条
+        list_scrollbar = tk.Scrollbar(list_container, orient="vertical", command=self.gen_queue_listbox.yview)
+        list_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.gen_queue_listbox.configure(yscrollcommand=list_scrollbar.set)
+
+        # V7.3: 坐标显示区 (移动到右侧，位于节点列表下方)
+        self.gen_coord_frame = ctk.CTkFrame(self.control_panel)
+        self.gen_coord_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
+        self.gen_coord_frame.grid_columnconfigure((1, 3), weight=1)
+
+        ctk.CTkLabel(
+            self.gen_coord_frame,
+            text="📍 目标坐标（百分比）",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(10, 8))
+
+        ctk.CTkLabel(self.gen_coord_frame, text="X1：").grid(row=1, column=0, sticky="w", padx=10, pady=4)
+        ctk.CTkEntry(self.gen_coord_frame, textvariable=self.gen_x1_var, width=80, state="readonly").grid(
             row=1, column=1, sticky="ew", padx=(0, 10), pady=4
         )
-        ctk.CTkLabel(coord_frame, text="Y1：").grid(row=1, column=2, sticky="w", padx=10, pady=4)
-        ctk.CTkEntry(coord_frame, textvariable=self.gen_y1_var, width=80, state="readonly").grid(
+        ctk.CTkLabel(self.gen_coord_frame, text="Y1：").grid(row=1, column=2, sticky="w", padx=10, pady=4)
+        ctk.CTkEntry(self.gen_coord_frame, textvariable=self.gen_y1_var, width=80, state="readonly").grid(
             row=1, column=3, sticky="ew", padx=(0, 10), pady=4
         )
 
-        ctk.CTkLabel(coord_frame, text="X2：").grid(row=2, column=0, sticky="w", padx=10, pady=4)
-        ctk.CTkEntry(coord_frame, textvariable=self.gen_x2_var, width=80, state="readonly").grid(
+        ctk.CTkLabel(self.gen_coord_frame, text="X2：").grid(row=2, column=0, sticky="w", padx=10, pady=4)
+        ctk.CTkEntry(self.gen_coord_frame, textvariable=self.gen_x2_var, width=80, state="readonly").grid(
             row=2, column=1, sticky="ew", padx=(0, 10), pady=4
         )
-        ctk.CTkLabel(coord_frame, text="Y2：").grid(row=2, column=2, sticky="w", padx=10, pady=4)
-        ctk.CTkEntry(coord_frame, textvariable=self.gen_y2_var, width=80, state="readonly").grid(
+        ctk.CTkLabel(self.gen_coord_frame, text="Y2：").grid(row=2, column=2, sticky="w", padx=10, pady=4)
+        ctk.CTkEntry(self.gen_coord_frame, textvariable=self.gen_y2_var, width=80, state="readonly").grid(
             row=2, column=3, sticky="ew", padx=(0, 10), pady=4
         )
 
-        # 同步坐标按钮
-        sync_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
-        sync_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        # 同步坐标按钮 (嵌入到 Control Panel)
+        sync_frame = ctk.CTkFrame(self.control_panel, fg_color="transparent")
+        sync_frame.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 10))
         sync_frame.grid_columnconfigure((0, 1), weight=1)
 
         self.btn_sync_from_live = ctk.CTkButton(
@@ -875,276 +1519,72 @@ class VintedAutomationConsole:
         )
         self.btn_clear_gen_coords.grid(row=0, column=1, sticky="ew", padx=(5, 0), pady=6)
 
-        # ==================== 中间：可视化交互区 ====================
-        center_panel = ctk.CTkFrame(self.tab_generator)
-        center_panel.grid(row=0, column=1, sticky="nsew", padx=5, pady=10)
-        center_panel.grid_rowconfigure(1, weight=1)
-        center_panel.grid_columnconfigure(0, weight=1)
+    # V7.10: Canvas Expand/Collapse Toggle
+    def _toggle_canvas_expand(self):
+        if self._canvas_expanded:
+            # Collapse: Restore side panels with original grid config
+            self.left_panel.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+            self.control_panel.grid(row=0, column=2, sticky="nsew", padx=5, pady=10)
+            self.screenshot_panel.grid(row=0, column=3, sticky="nsew", padx=(5, 10), pady=10)
+            self.center_panel.grid(row=0, column=1, sticky="nsew", padx=5, pady=10)
+            
+            # Hide compact toolbar
+            if hasattr(self, 'compact_toolbar'):
+                self.compact_toolbar.grid_remove()
+            
+            self.expand_btn.configure(text="↕ 展开")
+            self._canvas_expanded = False
+        else:
+            # Expand: Hide side panels, make canvas full width
+            self.left_panel.grid_remove()
+            self.control_panel.grid_remove()
+            self.screenshot_panel.grid_remove()
+            
+            # Make canvas span all columns (row 0)
+            self.center_panel.grid(row=0, column=0, columnspan=4, sticky="nsew", padx=5, pady=(10, 5))
+            
+            # Create/Show compact toolbar below canvas (row 1)
+            if not hasattr(self, 'compact_toolbar'):
+                self._create_compact_toolbar()
+            self.compact_toolbar.grid(row=1, column=0, columnspan=4, sticky="ew", padx=5, pady=(0, 10))
+            
+            self.expand_btn.configure(text="↕ 收起")
+            self._canvas_expanded = True
 
-        # 画布标题和操作按钮
-        canvas_header = ctk.CTkFrame(center_panel, fg_color="transparent")
-        canvas_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
-        canvas_header.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(
-            canvas_header,
-            text="🖼️ 截图预览（可直接框选）",
-            font=ctk.CTkFont(size=14, weight="bold"),
-        ).grid(row=0, column=0, sticky="w")
-
-        self.btn_gen_refresh = ctk.CTkButton(
-            canvas_header,
-            text="刷新截图",
-            width=100,
-            command=self.refresh_gen_screenshot,
-        )
-        self.btn_gen_refresh.grid(row=0, column=2, sticky="e", padx=(10, 0))
-
-        # 画布
-        self.gen_canvas = ctk.CTkCanvas(center_panel, bg="#1f1f1f", highlightthickness=0)
-        self.gen_canvas.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        self.gen_canvas.bind("<Button-1>", self.on_gen_canvas_press)
-        self.gen_canvas.bind("<B1-Motion>", self.on_gen_canvas_drag)
-        self.gen_canvas.bind("<ButtonRelease-1>", self.on_gen_canvas_release)
-        self.gen_canvas.bind("<Configure>", lambda _e: self.redraw_gen_screenshot())
-
-        self.gen_canvas.create_text(
-            50,
-            50,
-            text="请先连接设备并点击「刷新截图」",
-            fill="#9a9a9a",
-            anchor="nw",
-            font=("Arial", 14),
-            tags="placeholder",
-        )
-
-        # ==================== 右侧：操作与输出区 ====================
-        right_panel = ctk.CTkFrame(self.tab_generator)
-        right_panel.grid(row=0, column=2, sticky="nsew", padx=(5, 10), pady=10)
-        right_panel.grid_rowconfigure(3, weight=1)  # 步骤队列区域可扩展
-        right_panel.grid_rowconfigure(5, weight=1)  # 日志区域可扩展
-        right_panel.grid_columnconfigure(0, weight=1)
-
-        # 操作按钮区
-        action_frame = ctk.CTkFrame(right_panel)
-        action_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
-        action_frame.grid_columnconfigure((0, 1), weight=1)
-
-        ctk.CTkLabel(
-            action_frame,
-            text="🎮 操作",
-            font=ctk.CTkFont(size=15, weight="bold"),
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 8))
-
-        self.btn_test_action = ctk.CTkButton(
-            action_frame,
-            text="🧪 测试运行",
-            fg_color="#e74c3c",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            height=36,
-            command=self.gen_test_action,
-        )
-        self.btn_test_action.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 6))
-
-        self.btn_add_to_queue = ctk.CTkButton(
-            action_frame,
-            text="➕ 加入队列",
-            fg_color="#3498db",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            height=36,
-            command=self.gen_add_to_queue,
-        )
-        self.btn_add_to_queue.grid(row=2, column=0, sticky="ew", padx=(10, 3), pady=(0, 6))
-
-        # V3.2: 取消编辑按钮（初始隐藏）
-        self.btn_cancel_edit = ctk.CTkButton(
-            action_frame,
-            text="❌ 取消",
-            fg_color="#7f8c8d",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            height=36,
-            command=self.gen_cancel_edit,
-        )
-        # 初始不显示，编辑模式时才显示
+    def _create_compact_toolbar(self):
+        """Create a compact toolbar for use in expanded mode"""
+        self.compact_toolbar = ctk.CTkFrame(self.tab_designer, height=50, fg_color="#2a2a2a")
         
-        self.btn_generate_prompt = ctk.CTkButton(
-            action_frame,
-            text="📋 生成单步",
-            fg_color="#27ae60",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            height=36,
-            command=self.gen_generate_prompt,
-        )
-        self.btn_generate_prompt.grid(row=2, column=1, sticky="ew", padx=(3, 10), pady=(0, 6))
-
-        self.btn_export_all = ctk.CTkButton(
-            action_frame,
-            text="📤 导出全部指令",
-            fg_color="#9b59b6",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            height=36,
-            command=self.gen_export_all_prompts,
-        )
-        self.btn_export_all.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
-
-        # ==================== 步骤队列区 ====================
-        queue_frame = ctk.CTkFrame(right_panel)
-        queue_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
-        queue_frame.grid_columnconfigure(0, weight=1)
-        queue_frame.grid_rowconfigure(1, weight=1)
-
-        queue_header = ctk.CTkFrame(queue_frame, fg_color="transparent")
-        queue_header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
-        queue_header.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            queue_header,
-            text="📝 步骤队列",
-            font=ctk.CTkFont(size=14, weight="bold"),
-        ).grid(row=0, column=0, sticky="w")
-
-        # V3.2: 上移按钮
-        self.btn_move_up = ctk.CTkButton(
-            queue_header,
-            text="⬆️",
-            width=32,
-            fg_color="#555555",
-            command=self.gen_move_step_up,
-        )
-        self.btn_move_up.grid(row=0, column=1, sticky="e", padx=(5, 2))
-
-        # V3.2: 下移按钮
-        self.btn_move_down = ctk.CTkButton(
-            queue_header,
-            text="⬇️",
-            width=32,
-            fg_color="#555555",
-            command=self.gen_move_step_down,
-        )
-        self.btn_move_down.grid(row=0, column=2, sticky="e", padx=(0, 5))
-
-        self.btn_clear_queue = ctk.CTkButton(
-            queue_header,
-            text="清空",
-            width=45,
-            fg_color="#555555",
-            command=self.gen_clear_queue,
-        )
-        self.btn_clear_queue.grid(row=0, column=3, sticky="e", padx=(5, 2))
-
-        self.btn_remove_step = ctk.CTkButton(
-            queue_header,
-            text="删除",
-            width=45,
-            fg_color="#c0392b",
-            command=self.gen_remove_selected_step,
-        )
-        self.btn_remove_step.grid(row=0, column=4, sticky="e", padx=(0, 0))
-
-        # 步骤队列列表
-        queue_list_container = ctk.CTkFrame(queue_frame)
-        queue_list_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        queue_list_container.grid_rowconfigure(0, weight=1)
-        queue_list_container.grid_columnconfigure(0, weight=1)
-
-        self.gen_queue_listbox = tk.Listbox(
-            queue_list_container,
-            bg="#1f1f1f",
-            fg="#dddddd",
-            selectbackground="#3498db",
-            activestyle="none",
-            highlightthickness=0,
-            bd=0,
-            height=6,
-            font=("Consolas", 10),
-        )
-        self.gen_queue_listbox.grid(row=0, column=0, sticky="nsew")
-
-        # V3.2: 绑定双击事件用于编辑
-        self.gen_queue_listbox.bind("<Double-1>", self._gen_on_queue_double_click)
-
-        queue_scrollbar = tk.Scrollbar(queue_list_container, orient="vertical", command=self.gen_queue_listbox.yview)
-        queue_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.gen_queue_listbox.configure(yscrollcommand=queue_scrollbar.set)
-
-        # V3.3: 保存/加载流程按钮
-        flow_btn_frame = ctk.CTkFrame(queue_frame, fg_color="transparent")
-        flow_btn_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
-        flow_btn_frame.grid_columnconfigure((0, 1), weight=1)
-        flow_btn_frame.grid_rowconfigure((0, 1), weight=0)  # 确保两行都可见
-
-        self.btn_load_flow = ctk.CTkButton(
-            flow_btn_frame,
-            text="📂 加载流程",
-            fg_color="#2980b9",
-            font=ctk.CTkFont(size=12),
-            height=32,
-            command=self.gen_load_flow,
-        )
-        self.btn_load_flow.grid(row=0, column=0, sticky="ew", padx=(0, 3))
-
-        self.btn_save_flow = ctk.CTkButton(
-            flow_btn_frame,
-            text="💾 保存流程",
-            fg_color="#16a085",
-            font=ctk.CTkFont(size=12),
-            height=32,
-            command=self.gen_save_flow,
-        )
-        self.btn_save_flow.grid(row=0, column=1, sticky="ew", padx=(3, 0))
-
-        # V4.0: 运行全部流程按钮
-        self.btn_run_all = ctk.CTkButton(
-            flow_btn_frame,
-            text="▶️ 运行全部",
-            fg_color="#e74c3c",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            height=32,
-            command=self.gen_run_all_workflow,
-        )
-        self.btn_run_all.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-
-        # 预览区标题
-        preview_label_frame = ctk.CTkFrame(right_panel, fg_color="transparent")
-        preview_label_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(6, 0))
-        preview_label_frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            preview_label_frame,
-            text="📄 Prompt 预览",
-            font=ctk.CTkFont(size=14, weight="bold"),
-        ).grid(row=0, column=0, sticky="w")
-
-        self.btn_copy_prompt = ctk.CTkButton(
-            preview_label_frame,
-            text="复制",
-            width=50,
-            fg_color="#555555",
-            command=self.copy_gen_prompt,
-        )
-        self.btn_copy_prompt.grid(row=0, column=1, sticky="e")
-
-        # Prompt 预览框
-        self.gen_prompt_preview = ctk.CTkTextbox(
-            right_panel,
-            font=ctk.CTkFont(family="Consolas", size=10),
-            height=100,
-        )
-        self.gen_prompt_preview.grid(row=3, column=0, sticky="nsew", padx=10, pady=(6, 6))
-
-        # 输出日志区
-        log_frame = ctk.CTkFrame(right_panel)
-        log_frame.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 10))
-        log_frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            log_frame,
-            text="📋 测试日志",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).grid(row=0, column=0, sticky="w", padx=10, pady=(10, 4))
-
-        self.gen_log_text = ctk.CTkTextbox(log_frame, height=100, font=ctk.CTkFont(family="Consolas", size=10))
-        self.gen_log_text.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        ctk.CTkLabel(self.compact_toolbar, text="🧩 快捷节点:", font=("Arial", 12)).pack(side="left", padx=10)
+        
+        # Quick add buttons for common node types
+        quick_actions = [
+            ("🖱️ 点击", "Click Region"),
+            ("⏱️ 等待", "Wait Time"),
+            ("⌨️ 输入", "Input Text (Base64)"),
+            ("👆 滑动", "Swipe"),
+            ("🔁 循环", "LOOP (Count)"),
+        ]
+        
+        for label, action in quick_actions:
+            ctk.CTkButton(
+                self.compact_toolbar, text=label, width=60, height=28, fg_color="#444",
+                command=lambda a=action: self._add_node_to_canvas(a)
+            ).pack(side="left", padx=3)
+        
+        # Spacer
+        ctk.CTkFrame(self.compact_toolbar, width=20, fg_color="transparent").pack(side="left", expand=True)
+        
+        # Control buttons on the right
+        ctk.CTkButton(
+            self.compact_toolbar, text="▶️ 运行", width=60, height=28, fg_color="#27ae60",
+            command=self._orch_run_all
+        ).pack(side="right", padx=5)
+        
+        ctk.CTkButton(
+            self.compact_toolbar, text="💾 保存", width=60, height=28, fg_color="#3498db",
+            command=self._orch_export_json
+        ).pack(side="right", padx=3)
 
     def _make_labeled_entry(
         self,
@@ -3046,6 +3486,123 @@ search_region:
         except Exception as e:
             self.gen_log(f"⚠️ OCR 自动填充失败: {e}")
 
+    def _on_gen_category_change(self, category: str) -> None:
+        """V5.0: 类别下拉框改变时，更新动作下拉框"""
+        actions = list(ACTION_CATEGORIES.get(category, {}).keys())
+        self.gen_action_combo.configure(values=actions)
+        if actions:
+            self.gen_action_var.set(actions[0])
+
+    def _find_category_for_action(self, action: str) -> str:
+        """V5.0: 根据动作类型反查所属类别"""
+        for category, actions in ACTION_CATEGORIES.items():
+            if action in actions:
+                return category
+        return list(ACTION_CATEGORIES.keys())[0]
+
+    # ==================== V6.0: 变量插入功能 ====================
+
+    def _load_excel_headers(self) -> list:
+        """V6.0: 尝试从 Excel 读取表头作为变量名"""
+        try:
+            import pandas as pd
+            from pathlib import Path
+            
+            # 尝试多个可能的数据文件路径
+            paths = []
+            if self.excel_path and Path(self.excel_path).exists():
+                paths.append(Path(self.excel_path))
+                
+            paths.extend([
+                Path(__file__).parent / "data" / "output.xlsx",
+                Path(__file__).parent / "output.xlsx",
+                Path(__file__).parent / "data.xlsx",
+            ])
+            
+            for p in paths:
+                if p.exists():
+                    df = pd.read_excel(p, nrows=0)
+                    return list(df.columns)
+            
+            return []
+        except Exception:
+            return []
+
+    def _select_excel_path(self):
+        """Select Custom Excel File"""
+        path = filedialog.askopenfilename(
+            title="Select Excel Data",
+            filetypes=[("Excel Files", "*.xlsx;*.xls")]
+        )
+        if path:
+            self.excel_path = path
+            self._load_variable_buttons()
+            messagebox.showinfo("Info", f"Selected: {Path(path).name}")
+
+    def _browse_param_image(self):
+        """Select Image for Parameter"""
+        path = filedialog.askopenfilename(
+            title="Select Template Image",
+            filetypes=[("Images", "*.png;*.jpg;*.jpeg;*.bmp")]
+        )
+        if path:
+            self.gen_param_var.set(path)
+
+    def _load_variable_buttons(self) -> None:
+        """V6.0: 加载变量快捷按钮 (Grid Layout)"""
+        # 清除旧按钮
+        for widget in self.gen_var_frame.winfo_children():
+            widget.destroy()
+        
+        # 默认变量列表 (回退值)
+        default_vars = ["SKU", "Title", "Price", "Brand", "Size", "Color"]
+        
+        # 尝试从 Excel 读取
+        excel_vars = self._load_excel_headers()
+        variables = excel_vars if excel_vars else default_vars
+        
+        # Grid config
+        self.gen_var_frame.grid_columnconfigure((0, 1, 2), weight=1)
+
+        # 创建按钮
+        for i, var_name in enumerate(variables[:12]):  # 最多显示12个
+            btn = ctk.CTkButton(
+                self.gen_var_frame,
+                text=f"${{{var_name}}}",
+                width=60,
+                height=24,
+                fg_color="#3a3a3a",
+                hover_color="#555",
+                font=ctk.CTkFont(size=11),
+                command=lambda v=var_name: self._insert_variable(v)
+            )
+            # 3 Columns
+            btn.grid(row=i // 3, column=i % 3, padx=1, pady=1, sticky="ew")
+
+    def _show_variable_menu(self) -> None:
+        """V6.0: 显示变量选择菜单"""
+        menu = tk.Menu(self.root, tearoff=0)
+        
+        # 默认变量 + Excel 变量
+        default_vars = ["SKU", "Title", "Price", "Brand", "Size", "Color", "Description"]
+        excel_vars = self._load_excel_headers()
+        
+        all_vars = list(dict.fromkeys(excel_vars + default_vars))  # 去重保持顺序
+        
+        for var_name in all_vars:
+            menu.add_command(
+                label=f"${{{var_name}}}",
+                command=lambda v=var_name: self._insert_variable(v)
+            )
+        
+        menu.post(self.root.winfo_pointerx(), self.root.winfo_pointery())
+
+    def _insert_variable(self, var_name: str) -> None:
+        """V6.0: 将变量插入到参数输入框"""
+        current = self.gen_param_var.get()
+        self.gen_param_var.set(current + f"${{{var_name}}}")
+        self.gen_log(f"📊 已插入变量: ${{{var_name}}}")
+
     def gen_test_action(self) -> None:
         """测试当前配置的动作"""
         if not self.require_device():
@@ -3541,16 +4098,46 @@ Step {i}: {action}
         self.gen_log(f"⬇️ 已下移步骤")
 
     def _gen_refresh_queue_listbox(self) -> None:
-        """V3.2: 根据 gen_step_queue 刷新列表显示"""
+        """V6.0: 刷新列表显示 - 带缩进和图标"""
         self.gen_queue_listbox.delete(0, tk.END)
-        for step_data in self.gen_step_queue:
-            step = step_data.get("step", "Step X")
+        
+        indent_level = 0
+        for i, step_data in enumerate(self.gen_step_queue):
+            step = step_data.get("step", f"Step {i+1}")
             action = step_data.get("action", "Unknown")
             param = step_data.get("param", "")
-            display_text = f"{step}: {action}"
+            context = step_data.get("context", "")
+            
+            # 缩进处理: END 节点先减少缩进
+            if action in ("END IF", "END LOOP"):
+                indent_level = max(0, indent_level - 1)
+            
+            # 构建缩进前缀
+            if indent_level > 0:
+                prefix = "    " * (indent_level - 1) + "|__ "
+            else:
+                prefix = ""
+            
+            # 获取图标
+            icon = NODE_STYLES.get(action, {}).get("icon", "?")
+            
+            # 构建显示文本
+            step_num = step.replace("Step ", "") if "Step " in step else str(i + 1)
+            display_text = f"{prefix}[{step_num}] {icon} {action}"
+            
+            # 添加参数预览
             if param:
-                display_text += f" ({param[:15]}...)" if len(param) > 15 else f" ({param})"
+                param_preview = param[:12] + "..." if len(param) > 12 else param
+                display_text += f" | {param_preview}"
+            elif context:
+                ctx_preview = context[:12] + "..." if len(context) > 12 else context
+                display_text += f" | {ctx_preview}"
+            
             self.gen_queue_listbox.insert(tk.END, display_text)
+            
+            # 增加缩进: IF/LOOP 开始节点
+            if action in ("IF (Check Text)", "IF (Check Image)", "LOOP (Count)", "LOOP (Until Text)"):
+                indent_level += 1
 
     # ==================== V3.3: 数据持久化 ====================
 
@@ -3879,6 +4466,18 @@ Step {i}: {action}
         )
         self.orch_canvas.grid(row=0, column=0, sticky="nsew")
 
+        # 滚动条配置
+        h_scroll = tk.Scrollbar(canvas_frame, orient="horizontal", command=self.orch_canvas.xview)
+        v_scroll = tk.Scrollbar(canvas_frame, orient="vertical", command=self.orch_canvas.yview)
+        
+        h_scroll.grid(row=1, column=0, sticky="ew")
+        v_scroll.grid(row=0, column=1, sticky="ns")
+        
+        self.orch_canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
+        
+        # 配置 infinite canvas 扩展时的滚动区域更新
+        self.orch_canvas.bind("<Configure>", lambda e: self.orch_canvas.configure(scrollregion=self.orch_canvas.bbox("all")))
+
         # 画布事件绑定
         self.orch_canvas.bind("<Button-1>", self._orch_on_canvas_click)
         self.orch_canvas.bind("<B1-Motion>", self._orch_on_canvas_drag)
@@ -3886,6 +4485,14 @@ Step {i}: {action}
         self.orch_canvas.bind("<Double-Button-1>", self._orch_on_canvas_double_click)
         self.orch_canvas.bind("<Delete>", self._orch_delete_selected_node)
         self.orch_canvas.bind("<BackSpace>", self._orch_delete_selected_node)
+        
+        # 拖拽画布 (中键 或 右键 或 Ctrl+左键)
+        self.orch_canvas.bind("<ButtonPress-2>", self._orch_on_canvas_pan_start)
+        self.orch_canvas.bind("<B2-Motion>", self._orch_on_canvas_pan_drag)
+        self.orch_canvas.bind("<ButtonPress-3>", self._orch_on_canvas_pan_start) # 临时改右键拖拽测试
+        self.orch_canvas.bind("<B3-Motion>", self._orch_on_canvas_pan_drag)
+        self.orch_canvas.bind("<Control-ButtonPress-1>", self._orch_on_canvas_pan_start)
+        self.orch_canvas.bind("<Control-B1-Motion>", self._orch_on_canvas_pan_drag)
 
         # 底部工具栏
         toolbar = ctk.CTkFrame(canvas_frame, fg_color="transparent")
@@ -4070,9 +4677,18 @@ Step {i}: {action}
             prop_frame,
             text="💾 保存修改",
             fg_color="#2e8b57",
-            height=40,
+            height=36,
             command=self._orch_save_node_properties,
-        ).grid(row=11, column=0, columnspan=2, sticky="ew", padx=10, pady=20)
+        ).grid(row=11, column=0, columnspan=2, sticky="ew", padx=10, pady=(15, 5))
+
+        # V7.0: 测试当前节点按钮
+        ctk.CTkButton(
+            prop_frame,
+            text="⚡ 测试当前节点",
+            fg_color="#e74c3c",
+            height=36,
+            command=self._orch_test_selected_node,
+        ).grid(row=12, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
 
         # 提示标签
         self.orch_hint_label = ctk.CTkLabel(
@@ -4081,7 +4697,8 @@ Step {i}: {action}
             text_color="#666666",
             font=ctk.CTkFont(size=11),
         )
-        self.orch_hint_label.grid(row=12, column=0, columnspan=2, sticky="w", padx=10)
+        if hasattr(self, 'orch_hint_label'):
+            self.orch_hint_label.grid(row=13, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 5))
 
         # 绘制初始网格
         self.orch_canvas.bind("<Configure>", lambda e: self._orch_draw_grid())
@@ -4108,6 +4725,30 @@ Step {i}: {action}
 
         self.orch_canvas.tag_lower("grid")
 
+    def _orch_refresh_listbox(self) -> None:
+        """刷新右侧节点列表"""
+        if not hasattr(self, 'gen_queue_listbox'):
+            return
+            
+        self.gen_queue_listbox.delete(0, tk.END)
+        
+        # 按 Step Name 这里的数字排序 (如果格式为 "Step N")
+        try:
+            nodes = list(self.orch_nodes.values())
+            # 尝试提取 Step 后面的数字排序
+            import re
+            def sort_key(n):
+                match = re.search(r'(\d+)', n.step_name)
+                return int(match.group(1)) if match else 999999
+            nodes.sort(key=sort_key)
+        except:
+            # 失败则按创建顺序 (这里用ID/StepName fallback)
+            nodes.sort(key=lambda n: n.step_name)
+        
+        for node in nodes:
+            display = f"{node.step_name}: {node.action_type}"
+            self.gen_queue_listbox.insert(tk.END, display)
+
     def _orch_add_node_from_palette(self, action_type: str) -> None:
         """从节点库添加节点到画布中心"""
         # 计算新节点位置（错开已有节点）
@@ -4128,14 +4769,22 @@ Step {i}: {action}
         self.orch_nodes[node_id] = node
         self._orch_draw_node(node)
         self._orch_select_node(node_id)
+        self._orch_select_node(node_id)
         self.log(f"[编排] 添加节点: {step_name} ({action_type})")
+        self._orch_refresh_listbox()
+
+    def _add_node_to_canvas(self, action_type: str) -> None:
+        """V6.0: 从节点库添加节点到画布 (统一接口)"""
+        self._orch_add_node_from_palette(action_type)
 
     def _orch_draw_node(self, node: WorkflowNode) -> None:
-        """绘制单个节点"""
+        """V7.0: 绘制单个节点 (增强视觉效果)"""
         style = NODE_STYLES.get(node.action_type, {"color": "#666666", "icon": "?", "label": "未知"})
 
         x, y = node.canvas_x, node.canvas_y
-        w, h = 140, 60
+        w, h = 160, 70
+        r = 8  # 圆角半径
+        is_selected = self.orch_selected_node == node.id
 
         # 清除旧的绘制
         if node.id in self.orch_node_canvas_items:
@@ -4143,68 +4792,180 @@ Step {i}: {action}
                 self.orch_canvas.delete(item_id)
 
         items = []
+        
+        # 阴影效果
+        shadow_id = self.orch_canvas.create_rectangle(
+            x + 3, y + 3, x + w + 3, y + h + 3,
+            fill="#0a0a0a", outline="",
+            tags=("node", f"node_{node.id}"),
+        )
+        items.append(shadow_id)
 
-        # 节点背景（圆角矩形模拟）
+        # 节点背景
+        bg_color = style["color"]
+        outline_color = "#ffffff" if is_selected else "#333333"
+        outline_width = 3 if is_selected else 1
+        
         rect_id = self.orch_canvas.create_rectangle(
             x, y, x + w, y + h,
-            fill=style["color"],
-            outline="#ffffff" if self.orch_selected_node == node.id else "#444444",
-            width=3 if self.orch_selected_node == node.id else 1,
+            fill=bg_color,
+            outline=outline_color,
+            width=outline_width,
             tags=("node", f"node_{node.id}"),
         )
         items.append(rect_id)
+        
+        # 标题栏背景 (深色)
+        header_id = self.orch_canvas.create_rectangle(
+            x + 1, y + 1, x + w - 1, y + 22,
+            fill=self._darken_color(bg_color),
+            outline="",
+            tags=("node", f"node_{node.id}"),
+        )
+        items.append(header_id)
 
         # 节点图标和标题
         title_text = f"{style['icon']} {node.step_name}"
-        if len(title_text) > 16:
-            title_text = title_text[:14] + "..."
+        if len(title_text) > 18:
+            title_text = title_text[:16] + "..."
 
         title_id = self.orch_canvas.create_text(
-            x + w // 2, y + 20,
+            x + 10, y + 12,
             text=title_text,
             fill="white",
-            font=("Arial", 11, "bold"),
+            font=("Arial", 10, "bold"),
+            anchor="w",
             tags=("node", f"node_{node.id}"),
         )
         items.append(title_id)
 
+        # V7.9: Right Icon (Emoji or Image)
+        icon_val = style.get("icon", "?")
+        icon_x = x + w - 25
+        icon_y = y + h // 2 + 5
+        
+        # Check if Image
+        if isinstance(icon_val, str) and icon_val.lower().endswith(('.png', '.jpg')):
+             try:
+                 if Path(icon_val).exists():
+                     # Cache Key
+                     cache_key = f"{icon_val}_32"
+                     if cache_key not in self.orch_node_images:
+                         pil_img = Image.open(icon_val).resize((32, 32))
+                         self.orch_node_images[cache_key] = ImageTk.PhotoImage(pil_img)
+                     
+                     img_obj = self.orch_node_images[cache_key]
+                     img_id = self.orch_canvas.create_image(
+                         icon_x, icon_y, image=img_obj, tags=("node", f"node_{node.id}")
+                     )
+                     items.append(img_id)
+             except Exception:
+                 pass
+        else:
+             # Emoji/Text
+             emoji_id = self.orch_canvas.create_text(
+                  icon_x, icon_y,
+                  text=icon_val,
+                  font=("Segoe UI Emoji", 24),
+                  fill="#555",
+                  tags=("node", f"node_{node.id}")
+             )
+             items.append(emoji_id)
+
         # 动作类型标签
         action_id = self.orch_canvas.create_text(
-            x + w // 2, y + 42,
+            x + 10, y + 38,
             text=style["label"],
-            fill="#cccccc",
+            fill="#dddddd",
             font=("Arial", 9),
+            anchor="w",
             tags=("node", f"node_{node.id}"),
         )
         items.append(action_id)
+        
+        # 参数预览
+        param_text = str(node.params)[:20] if node.params else ""
+        if param_text:
+            param_id = self.orch_canvas.create_text(
+                x + 10, y + 55,
+                text=param_text,
+                fill="#aaaaaa",
+                font=("Arial", 8),
+                anchor="w",
+                tags=("node", f"node_{node.id}"),
+            )
+            items.append(param_id)
 
-        # 输出连接点（右侧小圆点）
-        out_dot_id = self.orch_canvas.create_oval(
-            x + w - 5, y + h // 2 - 5,
-            x + w + 5, y + h // 2 + 5,
-            fill="#ffffff",
-            outline=style["color"],
-            tags=("output_port", f"output_{node.id}"),
+        # 输入连接点（左侧圆点）
+        in_x, in_y = x, y + h // 2
+        in_ring_id = self.orch_canvas.create_oval(
+            in_x - 8, in_y - 8, in_x + 8, in_y + 8,
+            fill="#2a2a2a", outline=bg_color, width=2,
+            tags=("input_port", f"input_{node.id}"),
         )
-        items.append(out_dot_id)
-
-        # 输入连接点（左侧小圆点）
+        items.append(in_ring_id)
         in_dot_id = self.orch_canvas.create_oval(
-            x - 5, y + h // 2 - 5,
-            x + 5, y + h // 2 + 5,
-            fill="#ffffff",
-            outline=style["color"],
+            in_x - 4, in_y - 4, in_x + 4, in_y + 4,
+            fill="#ffffff", outline="",
             tags=("input_port", f"input_{node.id}"),
         )
         items.append(in_dot_id)
 
+        # 输出连接点（右侧圆点）
+        out_x, out_y = x + w, y + h // 2
+        out_ring_id = self.orch_canvas.create_oval(
+            out_x - 8, out_y - 8, out_x + 8, out_y + 8,
+            fill="#2a2a2a", outline=bg_color, width=2,
+            tags=("output_port", f"output_{node.id}"),
+        )
+        items.append(out_ring_id)
+        out_dot_id = self.orch_canvas.create_oval(
+            out_x - 4, out_y - 4, out_x + 4, out_y + 4,
+            fill="#ffffff", outline="",
+            tags=("output_port", f"output_{node.id}"),
+        )
+        items.append(out_dot_id)
+
         self.orch_node_canvas_items[node.id] = items
 
     def _orch_draw_all_nodes(self) -> None:
-        """重绘所有节点"""
+        """绘制所有节点和连接"""
+        self._orch_clear_canvas_items()
+        
+        # 绘制所有连接
+        for from_id, to_id in self.orch_connections:
+            self._orch_draw_connection(from_id, to_id)
+            
+        # 绘制所有节点
         for node in self.orch_nodes.values():
             self._orch_draw_node(node)
-        self._orch_draw_all_connections()
+            
+        # 更新滚动区域
+        self.orch_canvas.configure(scrollregion=self.orch_canvas.bbox("all"))
+
+    def _orch_update_connections(self, node_id: str) -> None:
+        """更新与指定节点相关的所有连接"""
+        # 找出相关的连接
+        related_connections = [
+            (from_id, to_id) 
+            for from_id, to_id in self.orch_connections 
+            if from_id == node_id or to_id == node_id
+        ]
+        
+        # 重绘这些连接
+        for from_id, to_id in related_connections:
+            # 删除旧线
+            if (from_id, to_id) in self.orch_connection_lines:
+                self.orch_canvas.delete(self.orch_connection_lines[(from_id, to_id)])
+            
+            # 绘制新线
+            self._orch_draw_connection(from_id, to_id)
+
+    def _orch_draw_all_connections(self) -> None:
+        """绘制所有连接线"""
+        for from_id, to_id in self.orch_connections:
+            if (from_id, to_id) not in self.orch_connection_lines:
+                self._orch_draw_connection(from_id, to_id)
 
     def _orch_draw_connection(self, from_id: str, to_id: str) -> None:
         """绘制两个节点之间的连接线（贝塞尔曲线）"""
@@ -4214,13 +4975,13 @@ Step {i}: {action}
         from_node = self.orch_nodes[from_id]
         to_node = self.orch_nodes[to_id]
 
-        # 起点：源节点右侧中心
-        x1 = from_node.canvas_x + 140
-        y1 = from_node.canvas_y + 30
+        # 起点：源节点右侧中心 (新尺寸: 160x70)
+        x1 = from_node.canvas_x + 160
+        y1 = from_node.canvas_y + 35
 
         # 终点：目标节点左侧中心
         x2 = to_node.canvas_x
-        y2 = to_node.canvas_y + 30
+        y2 = to_node.canvas_y + 35
 
         # 贝塞尔曲线控制点
         cx1 = x1 + abs(x2 - x1) / 3
@@ -4238,19 +4999,34 @@ Step {i}: {action}
         # 删除旧线
         key = (from_id, to_id)
         if key in self.orch_connection_lines:
-            self.orch_canvas.delete(self.orch_connection_lines[key])
+            for item in self.orch_connection_lines[key]:
+                self.orch_canvas.delete(item)
 
-        # 绘制新线
-        line_id = self.orch_canvas.create_line(
+        items = []
+        
+        # 绘制光晕 (更粗的半透明线)
+        glow_id = self.orch_canvas.create_line(
             points,
-            fill="#888888",
-            width=2,
+            fill="#4fc3f7",
+            width=6,
             smooth=True,
-            arrow=tk.LAST,
-            arrowshape=(10, 12, 5),
             tags=("connection", f"conn_{from_id}_{to_id}"),
         )
-        self.orch_connection_lines[key] = line_id
+        items.append(glow_id)
+        
+        # 绘制主线
+        line_id = self.orch_canvas.create_line(
+            points,
+            fill="#81d4fa",
+            width=3,
+            smooth=True,
+            arrow=tk.LAST,
+            arrowshape=(12, 15, 6),
+            tags=("connection", f"conn_{from_id}_{to_id}"),
+        )
+        items.append(line_id)
+        
+        self.orch_connection_lines[key] = items
         self.orch_canvas.tag_lower("connection")
 
     def _orch_draw_all_connections(self) -> None:
@@ -4258,19 +5034,35 @@ Step {i}: {action}
         for from_id, to_id in self.orch_connections:
             self._orch_draw_connection(from_id, to_id)
 
+    def _on_node_list_select(self, event) -> None:
+        """V6.0: 节点列表选择事件"""
+        selection = self.gen_queue_listbox.curselection()
+        if selection:
+            # 获取选中的节点并高亮
+            idx = selection[0]
+            node_ids = list(self.orch_nodes.keys())
+            if idx < len(node_ids):
+                node_id = node_ids[idx]
+                self._orch_select_node(node_id)
+
     def _orch_on_canvas_click(self, event) -> None:
         """画布点击事件"""
         self.orch_canvas.focus_set()
+        
+        # 转换为画布坐标
+        cx = self.orch_canvas.canvasx(event.x)
+        cy = self.orch_canvas.canvasy(event.y)
 
         # 检查是否点击了输出端口（开始连接）
-        items = self.orch_canvas.find_overlapping(event.x - 5, event.y - 5, event.x + 5, event.y + 5)
+        items = self.orch_canvas.find_overlapping(cx - 8, cy - 8, cx + 8, cy + 8)
         for item in items:
             tags = self.orch_canvas.gettags(item)
             for tag in tags:
-                if tag.startswith("output_"):
+                if tag.startswith("output_") and tag != "output_port":
                     node_id = tag.replace("output_", "")
-                    self.orch_connecting_from = node_id
-                    return
+                    if node_id in self.orch_nodes:
+                        self.orch_connecting_from = node_id
+                        return
 
         # 检查是否点击了节点
         for item in items:
@@ -4291,24 +5083,29 @@ Step {i}: {action}
                             to_node = self.orch_nodes.get(to_id)
                             self.log(f"[编排] 🔗 已连接: {from_node.step_name} → {to_node.step_name}")
                         self.orch_manual_connect_from = None
-                        self.orch_hint_label.configure(text="连接完成")
+                        if hasattr(self, 'orch_hint_label'):
+                            self.orch_hint_label.configure(text="连接完成")
                         return
                     
                     self._orch_select_node(node_id)
                     # 记录拖拽偏移
                     node = self.orch_nodes[node_id]
                     self.orch_drag_node_id = node_id
-                    self.orch_drag_offset = (event.x - node.canvas_x, event.y - node.canvas_y)
+                    self.orch_drag_offset = (cx - node.canvas_x, cy - node.canvas_y)
                     return
 
         # 点击空白区域，取消选择和手动连接模式
         self._orch_deselect_node()
         if self.orch_manual_connect_from:
             self.orch_manual_connect_from = None
-            self.orch_hint_label.configure(text="手动连接已取消")
+            if hasattr(self, 'orch_hint_label'):
+                self.orch_hint_label.configure(text="手动连接已取消")
 
     def _orch_on_canvas_drag(self, event) -> None:
         """画布拖拽事件"""
+        cx = self.orch_canvas.canvasx(event.x)
+        cy = self.orch_canvas.canvasy(event.y)
+
         # 正在创建连接
         if self.orch_connecting_from:
             if self.orch_temp_line_id:
@@ -4316,10 +5113,11 @@ Step {i}: {action}
 
             from_node = self.orch_nodes.get(self.orch_connecting_from)
             if from_node:
-                x1 = from_node.canvas_x + 140
-                y1 = from_node.canvas_y + 30
+                # 修正连接线起点 (160x70)
+                x1 = from_node.canvas_x + 160
+                y1 = from_node.canvas_y + 35
                 self.orch_temp_line_id = self.orch_canvas.create_line(
-                    x1, y1, event.x, event.y,
+                    x1, y1, cx, cy,
                     fill="#aaaaaa",
                     width=2,
                     dash=(5, 3),
@@ -4330,13 +5128,27 @@ Step {i}: {action}
         if self.orch_drag_node_id:
             node = self.orch_nodes.get(self.orch_drag_node_id)
             if node:
-                node.canvas_x = event.x - self.orch_drag_offset[0]
-                node.canvas_y = event.y - self.orch_drag_offset[1]
+                new_x = cx - self.orch_drag_offset[0]
+                new_y = cy - self.orch_drag_offset[1]
+                
+                # 允许拖拽到负坐标，但限制最小值为 0
+                new_x = max(0, new_x)
+                new_y = max(0, new_y)
+                
+                node.canvas_x = new_x
+                node.canvas_y = new_y
+                
                 self._orch_draw_node(node)
-                self._orch_draw_all_connections()
+                self._orch_update_connections(node.id)
+                
+                # 动态更新滚动区域
+                self.orch_canvas.configure(scrollregion=self.orch_canvas.bbox("all"))
 
     def _orch_on_canvas_release(self, event) -> None:
         """画布释放事件"""
+        cx = self.orch_canvas.canvasx(event.x)
+        cy = self.orch_canvas.canvasy(event.y)
+
         # 完成连接
         if self.orch_connecting_from:
             if self.orch_temp_line_id:
@@ -4344,31 +5156,32 @@ Step {i}: {action}
                 self.orch_temp_line_id = None
 
             # 检查是否释放在输入端口上
-            items = self.orch_canvas.find_overlapping(event.x - 10, event.y - 10, event.x + 10, event.y + 10)
+            items = self.orch_canvas.find_overlapping(cx - 10, cy - 10, cx + 10, cy + 10)
             for item in items:
                 tags = self.orch_canvas.gettags(item)
                 for tag in tags:
-                    if tag.startswith("input_"):
+                    if tag.startswith("input_") and tag != "input_port":
                         to_node_id = tag.replace("input_", "")
-                        if to_node_id != self.orch_connecting_from:
-                            # 创建连接
+                        if to_node_id != self.orch_connecting_from and to_node_id in self.orch_nodes:
                             conn = (self.orch_connecting_from, to_node_id)
                             if conn not in self.orch_connections:
                                 self.orch_connections.append(conn)
-                                self._orch_draw_connection(*conn)
-                                self.log(f"[编排] 连接: {self.orch_connecting_from} → {to_node_id}")
+                                self._orch_draw_connection(self.orch_connecting_from, to_node_id)
+                                self.log("[编排] 🔗 连接创建成功")
                         break
-
+            
             self.orch_connecting_from = None
 
+        # 结束拖拽
         self.orch_drag_node_id = None
+
 
     def _orch_on_canvas_double_click(self, event) -> None:
         """画布双击事件 - 编辑节点名称"""
         if self.orch_selected_node:
             node = self.orch_nodes.get(self.orch_selected_node)
-            if node:
-                # 简单实现：聚焦到名称输入框
+            if node and hasattr(self, 'orch_prop_name_entry'):
+                # 聚焦到名称输入框
                 self.orch_prop_name_entry.focus_set()
                 self.orch_prop_name_entry.select_range(0, tk.END)
 
@@ -4377,24 +5190,78 @@ Step {i}: {action}
         self.orch_selected_node = node_id
         node = self.orch_nodes.get(node_id)
         if node:
-            # 更新属性面板
-            self.orch_prop_name_var.set(node.step_name)
-            self.orch_prop_action_var.set(node.action_type)
-            self.orch_prop_params_var.set(node.params)
-            self.orch_prop_retry_var.set(str(node.retry_count))
-            self.orch_prop_optional_var.set(node.is_optional)
-            self.orch_prop_x1_var.set(str(node.coords.get("x1", 0)))
-            self.orch_prop_y1_var.set(str(node.coords.get("y1", 0)))
-            self.orch_prop_x2_var.set(str(node.coords.get("x2", 0)))
-            self.orch_prop_y2_var.set(str(node.coords.get("y2", 0)))
-            self.orch_hint_label.configure(text=f"已选中: {node.step_name}")
+            self._is_updating_ui = True
+            try:
+                # 更新属性面板变量 (deprecated)
+                self.orch_prop_name_var.set(node.step_name)
+                self.orch_prop_action_var.set(node.action_type)
+                self.orch_prop_params_var.set(node.params)
+                self.orch_prop_retry_var.set(str(node.retry_count))
+                self.orch_prop_optional_var.set(node.is_optional)
+                self.orch_prop_x1_var.set(str(node.coords.get("x1", 0)))
+                self.orch_prop_y1_var.set(str(node.coords.get("y1", 0)))
+                self.orch_prop_x2_var.set(str(node.coords.get("x2", 0)))
+                self.orch_prop_y2_var.set(str(node.coords.get("y2", 0)))
+                
+                # 同步到左侧面板 (Active)
+                if hasattr(self, 'gen_step_var'):
+                    self.gen_step_var.set(node.step_name)
+                if hasattr(self, 'gen_category_var'):
+                    category = self._find_category_for_action(node.action_type)
+                    self.gen_category_var.set(category)
+                    # Trigger category change logic manually if needed, or rely on command
+                    self._on_gen_category_change(category)
+                if hasattr(self, 'gen_action_var'):
+                    self.gen_action_var.set(node.action_type)
+                if hasattr(self, 'gen_param_var'):
+                    params_val = str(node.params)
+                    if node.action_type.startswith("IF") and params_val.startswith("op:"):
+                        try:
+                            parts = params_val.split("|", 1)
+                            op_code = parts[0].split(":")[1]
+                            value = parts[1] if len(parts) > 1 else ""
+                            
+                            rev_map = {
+                                "Contains": "包含 (Contains)",
+                                "NotContains": "不包含 (Not Contains)",
+                                "Equals": "等于 (Equals)",
+                                "NotEquals": "不等于 (Not Equals)"
+                            }
+                            if hasattr(self, 'gen_operator_var'):
+                                self.gen_operator_var.set(rev_map.get(op_code, "包含 (Contains)"))
+                            self.gen_param_var.set(value)
+                        except:
+                            self.gen_param_var.set(params_val)
+                    else:
+                        self.gen_param_var.set(params_val)
+                
+                # Update AI Context
+                if hasattr(self, 'gen_context_text'):
+                    self.gen_context_text.delete("1.0", tk.END)
+                    self.gen_context_text.insert("1.0", node.context)
+                    # V7.0: 绑定文本框修改事件
+                    self.gen_context_text.bind("<KeyRelease>", self._on_inspector_text_change)
+                    
+                # Update coordinates
+                if hasattr(self, 'gen_x1_var'):
+                    self.gen_x1_var.set(str(node.coords.get("x1", 0)))
+                    self.gen_y1_var.set(str(node.coords.get("y1", 0)))
+                    self.gen_x2_var.set(str(node.coords.get("x2", 0)))
+                    self.gen_y2_var.set(str(node.coords.get("y2", 0)))
+
+                # 更新提示标签（如果存在）
+                if hasattr(self, 'orch_hint_label'):
+                    self.orch_hint_label.configure(text=f"已选中: {node.step_name}")
+            finally:
+                self._is_updating_ui = False
 
         self._orch_draw_all_nodes()
 
     def _orch_deselect_node(self) -> None:
         """取消选中"""
         self.orch_selected_node = None
-        self.orch_hint_label.configure(text="点击节点查看属性")
+        if hasattr(self, 'orch_hint_label'):
+            self.orch_hint_label.configure(text="点击节点查看属性")
         self._orch_draw_all_nodes()
 
     def _orch_delete_selected_node(self, event=None) -> None:
@@ -4428,7 +5295,9 @@ Step {i}: {action}
             del self.orch_nodes[node_id]
 
         self._orch_deselect_node()
+        self._orch_deselect_node()
         self.log(f"[编排] 删除节点: {node.step_name if node else node_id}")
+        self._orch_refresh_listbox()
 
     def _orch_save_node_properties(self) -> None:
         """保存节点属性"""
@@ -4463,7 +5332,8 @@ Step {i}: {action}
 
         self._orch_draw_node(node)
         self.log(f"[编排] 保存节点: {node.step_name}")
-        self.orch_hint_label.configure(text=f"已保存: {node.step_name}")
+        if hasattr(self, 'orch_hint_label'):
+            self.orch_hint_label.configure(text=f"已保存: {node.step_name}")
 
     def _orch_insert_variable(self, var_name: str) -> None:
         """插入变量到参数框"""
@@ -4471,15 +5341,43 @@ Step {i}: {action}
         self.orch_prop_params_var.set(current + f"${{{var_name}}}")
 
     def _orch_sync_coords_from_live(self) -> None:
-        """从实时调试同步坐标"""
+        """从实时调试同步坐标和参数，并自动保存"""
         try:
+            # 1. 同步坐标
             self.orch_prop_x1_var.set(self.x1_var.get())
             self.orch_prop_y1_var.set(self.y1_var.get())
             self.orch_prop_x2_var.set(self.x2_var.get())
             self.orch_prop_y2_var.set(self.y2_var.get())
-            self.log("[编排] 已从实时调试同步坐标")
+
+            # 2. 同步参数 (优先尝试 gen_param_var，其次 ocr_target_text_var)
+            param = self.gen_param_var.get().strip()
+            if not param:
+                param = self.ocr_target_text_var.get().strip()
+            
+            if param:
+                self.orch_prop_params_var.set(param)
+            
+            # 3. 自动保存到选中节点
+            if self.orch_selected_node:
+                node = self.orch_nodes.get(self.orch_selected_node)
+                if node:
+                    try:
+                        node.coords = {
+                            "x1": float(self.x1_var.get()),
+                            "y1": float(self.y1_var.get()),
+                            "x2": float(self.x2_var.get()),
+                            "y2": float(self.y2_var.get()),
+                        }
+                        node.params = self.orch_prop_params_var.get()
+                        self.log(f"[编排] ✅ 已同步并保存节点数据: {node.step_name}")
+                        self._orch_mark_node_success(node.id) # 给予视觉反馈
+                        self.root.after(1000, lambda: self._orch_draw_node(node)) # 1秒后恢复
+                    except ValueError:
+                        self.log("[编排] ⚠️ 坐标无效，未自动保存")
+            
+            self.log("[编排] 已从实时调试同步")
         except Exception as e:
-            self.log(f"[编排] 同步坐标失败: {e}")
+            self.log(f"[编排] 同步失败: {e}")
 
     def _orch_auto_connect(self) -> None:
         """自动按顺序连接所有节点"""
@@ -4602,6 +5500,7 @@ Step {i}: {action}
             self._orch_draw_all_nodes()
             self._orch_auto_connect()
             self.log(f"[编排] 已导入 {len(self.orch_nodes)} 个节点")
+            self._orch_refresh_listbox()
             messagebox.showinfo("导入成功", f"已导入 {len(self.orch_nodes)} 个节点")
 
         except Exception as e:
@@ -4614,6 +5513,25 @@ Step {i}: {action}
         self.orch_nodes.clear()
         self.orch_connections.clear()
         self.orch_node_canvas_items.clear()
+        self.orch_connection_lines.clear()
+        self._orch_deselect_node()
+        self._orch_draw_grid()
+        self._orch_refresh_listbox()
+
+    def _orch_clear_canvas_items(self) -> None:
+        """清除画布上的所有元素记录（用于重绘）"""
+        self.orch_canvas.delete("all")
+        self.orch_node_canvas_items.clear()
+        self.orch_connection_lines.clear()
+        self._orch_draw_grid()
+
+    def _orch_on_canvas_pan_start(self, event):
+        """画布拖拽开始（中键或 Ctrl+左键）"""
+        self.orch_canvas.scan_mark(event.x, event.y)
+
+    def _orch_on_canvas_pan_drag(self, event):
+        """画布拖拽中"""
+        self.orch_canvas.scan_dragto(event.x, event.y, gain=1)
         self.orch_connection_lines.clear()
         self._orch_deselect_node()
 
@@ -4653,6 +5571,10 @@ Step {i}: {action}
                 result.append(node)
 
         return result
+
+    def _orch_run_all(self) -> None:
+        """V6.0: 运行全部节点 (alias)"""
+        self._orch_run_workflow()
 
     def _orch_run_workflow(self) -> None:
         """运行当前编排的全部工作流节点"""
@@ -4694,7 +5616,8 @@ Step {i}: {action}
             )
 
             self.log(f"[编排] 🚀 开始执行 {total_steps} 个步骤...")
-            self.orch_hint_label.configure(text=f"执行中: 0/{total_steps}")
+            if hasattr(self, 'orch_hint_label'):
+                self.orch_hint_label.configure(text=f"执行中: 0/{total_steps}")
             
             success_count = 0
             fail_count = 0
@@ -4706,7 +5629,8 @@ Step {i}: {action}
 
                 # 高亮当前执行的节点
                 self._orch_highlight_executing_node(node_id)
-                self.orch_hint_label.configure(text=f"执行中: {i+1}/{total_steps} - {step_name}")
+                if hasattr(self, 'orch_hint_label'):
+                    self.orch_hint_label.configure(text=f"执行中: {i+1}/{total_steps} - {step_name}")
                 self.root.update()
 
                 self.log(f"[编排] ▶️ [{i+1}/{total_steps}] {step_name} - {action_type}")
@@ -4737,7 +5661,8 @@ Step {i}: {action}
 
             # 汇总结果
             self.log(f"[编排] 🏁 执行完成: {success_count} 成功, {fail_count} 失败")
-            self.orch_hint_label.configure(text=f"完成: {success_count}✓ {fail_count}✗")
+            if hasattr(self, 'orch_hint_label'):
+                self.orch_hint_label.configure(text=f"完成: {success_count}✓ {fail_count}✗")
             
             if fail_count == 0:
                 messagebox.showinfo("执行完成", f"全部 {total_steps} 个步骤执行成功！")
@@ -4854,7 +5779,8 @@ Step {i}: {action}
         
         # 重绘节点以显示断点标记
         self._orch_draw_node(node)
-        self.orch_hint_label.configure(text=f"断点: {'已设置' if '[BREAKPOINT]' in node.context else '已移除'}")
+        if hasattr(self, 'orch_hint_label'):
+            self.orch_hint_label.configure(text=f"断点: {'已设置' if '[BREAKPOINT]' in node.context else '已移除'}")
     
     def _orch_run_with_breakpoints(self) -> None:
         """带断点调试运行 - 在断点处暂停"""
@@ -4884,7 +5810,8 @@ Step {i}: {action}
                 # 检查断点
                 if "[BREAKPOINT]" in node.context:
                     self._orch_highlight_executing_node(node.id)
-                    self.orch_hint_label.configure(text=f"⏸️ 断点暂停: {node.step_name}")
+                    if hasattr(self, 'orch_hint_label'):
+                        self.orch_hint_label.configure(text=f"⏸️ 断点暂停: {node.step_name}")
                     self.root.update()
                     
                     result = messagebox.askquestion(
@@ -4913,7 +5840,8 @@ Step {i}: {action}
                 }
                 
                 self._orch_highlight_executing_node(node.id)
-                self.orch_hint_label.configure(text=f"执行: {i+1}/{total_steps} - {node.step_name}")
+                if hasattr(self, 'orch_hint_label'):
+                    self.orch_hint_label.configure(text=f"执行: {i+1}/{total_steps} - {node.step_name}")
                 self.root.update()
                 
                 success = runner.execute_step(step_data, {})
@@ -4982,7 +5910,8 @@ Step {i}: {action}
         
         self.orch_manual_connect_from = self.orch_selected_node
         node = self.orch_nodes.get(self.orch_selected_node)
-        self.orch_hint_label.configure(text=f"🔗 从 {node.step_name} 连接到... (点击目标节点)")
+        if hasattr(self, 'orch_hint_label'):
+            self.orch_hint_label.configure(text=f"🔗 从 {node.step_name} 连接到... (点击目标节点)")
         self.log(f"[编排] 🔗 手动连接模式: 从 {node.step_name} 开始，点击目标节点完成连接")
     
     def _orch_on_right_click(self, event) -> None:
@@ -5039,6 +5968,164 @@ Step {i}: {action}
         self.orch_selected_node = node_id
         self._orch_draw_all_nodes()
         self._orch_delete_selected_node()
+
+    def _orch_disconnect_selected_node_all(self) -> None:
+        """V7.5: 断开选中节点的所有连接"""
+        if not self.orch_selected_node:
+            messagebox.showinfo("提示", "请先选择要断开的节点")
+            return
+            
+        node_id = self.orch_selected_node
+        
+        # 筛选出要保留的连接
+        new_conns = []
+        removed_count = 0
+        
+        keys_to_delete = []
+        
+        for conn in self.orch_connections:
+            if conn[0] == node_id or conn[1] == node_id:
+                # 删除对应的线段
+                key = f"{conn[0]}_{conn[1]}"
+                if key in self.orch_connection_lines:
+                    keys_to_delete.append(key)
+                removed_count += 1
+            else:
+                new_conns.append(conn)
+        
+        # 执行删除
+        for key in keys_to_delete:
+            self.orch_canvas.delete(self.orch_connection_lines[key])
+            del self.orch_connection_lines[key]
+            
+        self.orch_connections = new_conns
+        self.log(f"[编排] 🔌 已断开节点所有连接 ({removed_count} 条)")
+
+    def _orch_test_click_region(self) -> None:
+        """V7.5: 测试点击当前节点区域 (静态测试)"""
+        if not self.orch_selected_node:
+            messagebox.showinfo("提示", "请先选择要测试的节点")
+            return
+            
+        if not self.device:
+            messagebox.showwarning("警告", "请先连接设备")
+            return
+            
+        node = self.orch_nodes.get(self.orch_selected_node)
+        if not node:
+            return
+
+        coords = node.coords
+        try:
+            # 计算中心点
+            x1 = float(coords.get("x1", 0))
+            y1 = float(coords.get("y1", 0))
+            x2 = float(coords.get("x2", 0))
+            y2 = float(coords.get("y2", 0))
+            
+            if x1 == 0 and x2 == 0:
+                 # 防止误点 (0,0)
+                 self.log("[测试] ⚠️ 坐标无效 (0,0)")
+                 return
+
+            cx = (x1 + x2) / 2
+            cy = (y1 + y2) / 2
+            
+            # 获取设备分辨率
+            w, h = self.device.window_size()
+            
+            px = int(cx * w)
+            py = int(cy * h)
+            
+            self.device.click(px, py)
+            self.log(f"[测试] 👆 点击坐标: ({px}, {py}) [{w}x{h}]")
+            
+        except Exception as e:
+            self.log(f"[测试] ❌ 点击失败: {e}")
+            messagebox.showerror("错误", f"点击测试失败: {e}")
+
+    def _show_extension_import(self):
+        """V7.9: Show Extension Import & Manage Dialog"""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("Extension Node Manager")
+        width = 900
+        height = 600
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        dialog.attributes("-topmost", True)
+        
+        # 2 Columns
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_columnconfigure(1, weight=1)
+        dialog.grid_rowconfigure(0, weight=1)
+        
+        # === Left: Import ===
+        left_frame = ctk.CTkFrame(dialog)
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        
+        ctk.CTkLabel(left_frame, text="📥 导入 (粘贴 AI JSON)", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=5)
+        text_box = ctk.CTkTextbox(left_frame)
+        text_box.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        def do_import():
+            json_str = text_box.get("1.0", "end")
+            success, msg = self.ext_manager.import_extension(json_str)
+            if success:
+                messagebox.showinfo("Success", f"{msg}\n\n请重启应用生效。", parent=dialog)
+                # Clear and refresh
+                text_box.delete("1.0", "end")
+                refresh_list()
+            else:
+                messagebox.showerror("Error", f"导入失败:\n{msg}", parent=dialog)
+                
+        ctk.CTkButton(left_frame, text="✅ 确认导入", command=do_import, fg_color="green").pack(pady=10)
+        
+        # === Right: Manage ===
+        right_frame = ctk.CTkFrame(dialog)
+        right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+        
+        ctk.CTkLabel(right_frame, text="🗑️ 管理已安装扩展", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=5)
+        
+        list_frame = ctk.CTkScrollableFrame(right_frame)
+        list_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        def refresh_list():
+            for widget in list_frame.winfo_children():
+                widget.destroy()
+            
+            nodes = self.ext_manager.load_nodes_metadata()
+            if not nodes:
+                ctk.CTkLabel(list_frame, text="(无扩展)", text_color="gray").pack(pady=20)
+                return
+
+            for node in nodes:
+                row = ctk.CTkFrame(list_frame)
+                row.pack(fill="x", pady=2)
+                
+                name = node.get("name", "Unknown")
+                icon = node.get("icon", "")
+                
+                # Try render icon if image
+                icon_txt = f"{icon} "
+                if ".png" in str(icon).lower():
+                    icon_txt = "🖼️ "
+
+                ctk.CTkLabel(row, text=f"{icon_txt}{name}", anchor="w", font=ctk.CTkFont(size=12)).pack(side="left", padx=10)
+                
+                def do_delete(n=name):
+                    if messagebox.askyesno("确认", f"确定删除扩展 '{n}' 吗?\n(代码将保留但失效)", parent=dialog):
+                        if self.ext_manager.delete_node(n):
+                            refresh_list()
+                            messagebox.showinfo("提示", "已删除，请重启应用。", parent=dialog)
+                        else:
+                            messagebox.showerror("错误", "删除失败。", parent=dialog)
+                            
+                ctk.CTkButton(row, text="🗑️", width=30, height=24, fg_color="#C0392B", command=do_delete).pack(side="right", padx=5, pady=2)
+
+        refresh_list()
 
     def run(self) -> None:
         self.root.mainloop()

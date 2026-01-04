@@ -1,0 +1,572 @@
+[
+  {
+    "step_id": 1,
+    "step_name": "Step 1",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 2,
+    "step_name": "Step 2",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 3,
+    "step_name": "Step 3",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 4,
+    "step_name": "Step 4",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 5,
+    "step_name": "Step 5",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 6,
+    "step_name": "Step 6",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 7,
+    "step_name": "Step 7",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 8,
+    "step_name": "Step 8",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 9,
+    "step_name": "Step 9",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 10,
+    "step_name": "Step 10",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 11,
+    "step_name": "Step 11",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 12,
+    "step_name": "Step 12",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 13,
+    "step_name": "Step 13",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 14,
+    "step_name": "Step 14",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 15,
+    "step_name": "Step 15",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 16,
+    "step_name": "Step 16",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 17,
+    "step_name": "Step 17",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 18,
+    "step_name": "Step 18",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 19,
+    "step_name": "Step 19",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 20,
+    "step_name": "Step 20",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 21,
+    "step_name": "Step 21",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 22,
+    "step_name": "Step 22",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 23,
+    "step_name": "Step 23",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 24,
+    "step_name": "Step 24",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 25,
+    "step_name": "Step 25",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 26,
+    "step_name": "Step 26",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 27,
+    "step_name": "Step 27",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 28,
+    "step_name": "Step 28",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 29,
+    "step_name": "Step 29",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 30,
+    "step_name": "Step 30",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 31,
+    "step_name": "Step 31",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 32,
+    "step_name": "Step 32",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 33,
+    "step_name": "Step 33",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 34,
+    "step_name": "Step 34",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 35,
+    "step_name": "Step 35",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 36,
+    "step_name": "Step 36",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 37,
+    "step_name": "Step 37",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 38,
+    "step_name": "Step 38",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  }
+]

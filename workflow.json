@@ -1,0 +1,332 @@
+[
+  {
+    "step_id": 1,
+    "step_name": "Step 1",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0.449,
+      "y1": 0.91,
+      "x2": 0.545,
+      "y2": 0.968
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 2,
+    "step_name": "Step 6",
+    "action_type": "Wait Time",
+    "params": "2",
+    "context": "",
+    "coords": {
+      "x1": 0.0,
+      "y1": 0.0,
+      "x2": 0.0,
+      "y2": 0.0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 3,
+    "step_name": "Step 2",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0.019,
+      "y1": 0.394,
+      "x2": 0.402,
+      "y2": 0.445
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 4,
+    "step_name": "Step 5",
+    "action_type": "Wait Time",
+    "params": "2",
+    "context": "",
+    "coords": {
+      "x1": 0.0,
+      "y1": 0.0,
+      "x2": 0.0,
+      "y2": 0.0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 5,
+    "step_name": "Step 5",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0.081,
+      "y1": 0.473,
+      "x2": 0.529,
+      "y2": 0.509
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 6,
+    "step_name": "Step 6",
+    "action_type": "Wait Time",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 7,
+    "step_name": "Step 7",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0.376,
+      "y1": 0.52,
+      "x2": 0.608,
+      "y2": 0.63
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 8,
+    "step_name": "Step 8",
+    "action_type": "Wait Time",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 9,
+    "step_name": "Step 9",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0.309,
+      "y1": 0.916,
+      "x2": 0.744,
+      "y2": 0.957
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 10,
+    "step_name": "Step 10",
+    "action_type": "Wait Time",
+    "params": "1",
+    "context": "",
+    "coords": {
+      "x1": 0.0,
+      "y1": 0.0,
+      "x2": 0.0,
+      "y2": 0.0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 11,
+    "step_name": "Step 11",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0.275,
+      "y1": 0.533,
+      "x2": 0.718,
+      "y2": 0.57
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 12,
+    "step_name": "Step 13",
+    "action_type": "Wait Time",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 0,
+      "y2": 0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 13,
+    "step_name": "Step 13",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0.06,
+      "y1": 0.507,
+      "x2": 0.537,
+      "y2": 0.534
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 14,
+    "step_name": "Step 14",
+    "action_type": "Wait Time",
+    "params": "1",
+    "context": "",
+    "coords": {
+      "x1": 0.062,
+      "y1": 0.428,
+      "x2": 0.608,
+      "y2": 0.474
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 15,
+    "step_name": "Step 15",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0.041,
+      "y1": 0.435,
+      "x2": 0.591,
+      "y2": 0.472
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 16,
+    "step_name": "Step 16",
+    "action_type": "Input Text",
+    "params": "others",
+    "context": "",
+    "coords": {
+      "x1": 0.041,
+      "y1": 0.435,
+      "x2": 0.591,
+      "y2": 0.472
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 17,
+    "step_name": "Step 17",
+    "action_type": "Wait Time",
+    "params": "1",
+    "context": "",
+    "coords": {
+      "x1": 0.0,
+      "y1": 0.0,
+      "x2": 0.0,
+      "y2": 0.0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 18,
+    "step_name": "Step 18",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0.012,
+      "y1": 0.601,
+      "x2": 0.292,
+      "y2": 0.635
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 19,
+    "step_name": "Step 19",
+    "action_type": "Wait Time",
+    "params": "1",
+    "context": "",
+    "coords": {
+      "x1": 0.0,
+      "y1": 0.0,
+      "x2": 0.0,
+      "y2": 0.0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 20,
+    "step_name": "Step 20",
+    "action_type": "Click Region",
+    "params": "",
+    "context": "",
+    "coords": {
+      "x1": 0.101,
+      "y1": 0.596,
+      "x2": 0.408,
+      "y2": 0.627
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 21,
+    "step_name": "Step 21",
+    "action_type": "Wait Time",
+    "params": "1",
+    "context": "",
+    "coords": {
+      "x1": 0.0,
+      "y1": 0.0,
+      "x2": 0.0,
+      "y2": 0.0
+    },
+    "retry_count": 0,
+    "is_optional": false
+  },
+  {
+    "step_id": 22,
+    "step_name": "Step 22",
+    "action_type": "Input Text",
+    "params": "hoka",
+    "context": "",
+    "coords": {
+      "x1": 0.101,
+      "y1": 0.596,
+      "x2": 0.408,
+      "y2": 0.627
+    },
+    "retry_count": 0,
+    "is_optional": false
+  }
+]

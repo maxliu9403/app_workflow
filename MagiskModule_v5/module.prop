@@ -1,0 +1,6 @@
+id=setclip_tool
+name=ADB SetClip Command
+version=v1.0
+versionCode=1
+author=Me
+description=System-level clipboard tool for automation. Usage: set_clip "text"

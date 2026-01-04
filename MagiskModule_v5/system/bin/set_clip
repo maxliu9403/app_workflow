@@ -1,0 +1,17 @@
+#!/system/bin/sh
+
+# 1. 指定 dex 在系统中的位置 (模块会自动挂载到这里)
+export CLASSPATH=/system/framework/clip.dex
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+TEXT="$1"
+# 如果第一个参数是 -b，则说明第二个参数是 base64
+if [ "$1" = "-b" ]; then
+    TEXT=$(echo "$2" | base64 -d)
+fi
+
+# 2. 调用安卓底层进程运行 Java 类
+exec app_process /system/bin SetClip "$TEXT"
+
+
