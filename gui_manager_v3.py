@@ -214,11 +214,6 @@ class VintedAutomationConsole:
         self.entry_update_job: Optional[str] = None
         self._building_ui: bool = False
 
-        self.log_folder: Optional[Path] = None
-        self.log_images: List[Path] = []
-        self.log_index: int = -1
-        self.log_tk_photo: Optional[ImageTk.PhotoImage] = None
-        self.log_image_pil: Optional[Image.Image] = None
 
         self.template_threshold_var = ctk.StringVar(value="0.80")
         self.template_scope_var = ctk.StringVar(value="全屏")
@@ -613,11 +608,9 @@ class VintedAutomationConsole:
         self.tabs.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
         self.tab_live = self.tabs.add("实时调试")
-        self.tab_log = self.tabs.add("日志回放")
         self.tab_designer = self.tabs.add("🛠️ 工作流设计器")  # V6.0: 统一设计器
 
         self._build_live_tab()
-        self._build_log_tab()
         self._build_designer_tab()  # V6.0: 合并 Generator + Orchestrator
 
         self._building_ui = False
@@ -802,7 +795,7 @@ class VintedAutomationConsole:
 
         match_row = ctk.CTkFrame(text_tool_frame, fg_color="transparent")
         match_row.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
-        match_row.grid_columnconfigure((0, 1), weight=1)
+        match_row.grid_columnconfigure((0, 1, 2), weight=1)
 
         self.btn_match_text = ctk.CTkButton(
             match_row,
@@ -812,12 +805,20 @@ class VintedAutomationConsole:
         )
         self.btn_match_text.grid(row=0, column=0, sticky="ew", padx=(0, 6))
 
+        self.btn_clear_ocr = ctk.CTkButton(
+            match_row,
+            text="清除OCR框",
+            fg_color="#555555",
+            command=self.clear_ocr_detections,
+        )
+        self.btn_clear_ocr.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+
         self.ocr_target_entry = ctk.CTkEntry(
             match_row,
             textvariable=self.ocr_target_text_var,
             placeholder_text="输入要匹配的文字",
         )
-        self.ocr_target_entry.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        self.ocr_target_entry.grid(row=0, column=2, sticky="ew", padx=(6, 0))
 
         template_frame = ctk.CTkFrame(control_panel)
         template_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
@@ -984,83 +985,6 @@ class VintedAutomationConsole:
 
         for var in (self.x1_var, self.y1_var, self.x2_var, self.y2_var):
             var.trace_add("write", lambda *_args: self.schedule_draw_from_entries())
-
-    def _build_log_tab(self) -> None:
-        self.tab_log.grid_rowconfigure(1, weight=1)
-        self.tab_log.grid_columnconfigure(0, weight=1)
-
-        top = ctk.CTkFrame(self.tab_log)
-        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
-        top.grid_columnconfigure(2, weight=1)
-
-        self.btn_load_folder = ctk.CTkButton(
-            top,
-            text="加载日志文件夹",
-            command=self.load_log_folder,
-        )
-        self.btn_load_folder.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-
-        self.log_folder_label = ctk.CTkLabel(top, text="未选择文件夹", text_color="#aaaaaa")
-        self.log_folder_label.grid(row=0, column=1, padx=10, pady=10, sticky="w")
-
-        body = ctk.CTkFrame(self.tab_log)
-        body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        body.grid_rowconfigure(0, weight=1)
-        body.grid_columnconfigure(1, weight=1)
-
-        left = ctk.CTkFrame(body, width=420)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=10)
-        left.grid_rowconfigure(1, weight=1)
-        left.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            left,
-            text="图片列表",
-            font=ctk.CTkFont(size=15, weight="bold"),
-        ).grid(row=0, column=0, sticky="w", padx=10, pady=(10, 6))
-
-        list_container = ctk.CTkFrame(left)
-        list_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        list_container.grid_rowconfigure(0, weight=1)
-        list_container.grid_columnconfigure(0, weight=1)
-
-        self.log_listbox = tk.Listbox(
-            list_container,
-            bg="#1f1f1f",
-            fg="#dddddd",
-            selectbackground="#2b6cb0",
-            activestyle="none",
-            highlightthickness=0,
-            bd=0,
-        )
-        self.log_listbox.grid(row=0, column=0, sticky="nsew")
-
-        scrollbar = tk.Scrollbar(list_container, orient="vertical", command=self.log_listbox.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.log_listbox.configure(yscrollcommand=scrollbar.set)
-        self.log_listbox.bind("<<ListboxSelect>>", lambda _e: self.on_log_list_select())
-
-        right = ctk.CTkFrame(body)
-        right.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=10)
-        right.grid_rowconfigure(0, weight=1)
-        right.grid_columnconfigure(0, weight=1)
-
-        self.log_canvas = ctk.CTkCanvas(right, bg="#1f1f1f", highlightthickness=0)
-        self.log_canvas.grid(row=0, column=0, sticky="nsew")
-        self.log_canvas.bind("<Configure>", lambda _e: self.redraw_log_image())
-
-        bottom = ctk.CTkFrame(self.tab_log)
-        bottom.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
-        bottom.grid_columnconfigure((0, 1, 2), weight=1)
-
-        self.btn_prev = ctk.CTkButton(bottom, text="上一张", command=lambda: self.step_log(-1))
-        self.btn_prev.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
-
-        self.log_index_label = ctk.CTkLabel(bottom, text="0 / 0")
-        self.log_index_label.grid(row=0, column=1, sticky="ew", padx=10, pady=10)
-
-        self.btn_next = ctk.CTkButton(bottom, text="下一张", command=lambda: self.step_log(1))
-        self.btn_next.grid(row=0, column=2, sticky="ew", padx=10, pady=10)
 
     def _build_designer_tab(self) -> None:
         """V6.0: 构建统一工作流设计器 Tab 页面 - 左-中-右布局
@@ -2547,6 +2471,23 @@ class VintedAutomationConsole:
             except Exception:
                 continue
 
+    def clear_ocr_detections(self) -> None:
+        """清除OCR检测框"""
+        for rect_id in self.ocr_rect_ids:
+            try:
+                self.canvas.delete(rect_id)
+            except Exception:
+                pass
+        for text_id in self.ocr_text_ids:
+            try:
+                self.canvas.delete(text_id)
+            except Exception:
+                pass
+        self.ocr_rect_ids.clear()
+        self.ocr_text_ids.clear()
+        self.ocr_detections.clear()
+        self.log("已清除OCR检测框")
+
     def _draw_offset_calculator(self) -> None:
         """绘制偏移计算器的标记（锚点A和目标区域B）"""
         if self.screenshot_pil is None:
@@ -3146,112 +3087,6 @@ search_region:
         except Exception as e:
             messagebox.showerror("保存失败", f"保存配置文件失败：\n{e}")
             self.log(f"保存配置文件失败：{e}")
-
-    def load_log_folder(self) -> None:
-        default_dir = Path(__file__).resolve().parent.parent / "logs" / "visual_trace"
-        folder = filedialog.askdirectory(title="选择日志文件夹", initialdir=str(default_dir))
-        if not folder:
-            return
-        p = Path(folder)
-        if not p.exists():
-            messagebox.showwarning("提示", "文件夹不存在")
-            return
-
-        exts = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
-        imgs = [x for x in sorted(p.iterdir()) if x.is_file() and x.suffix.lower() in exts]
-        self.log_folder = p
-        self.log_images = imgs
-        self.log_index = 0 if imgs else -1
-
-        self.log_folder_label.configure(text=str(p))
-        self.refresh_log_listbox()
-        self.show_log_image(self.log_index)
-
-    def refresh_log_listbox(self) -> None:
-        self.log_listbox.delete(0, "end")
-        for idx, img in enumerate(self.log_images):
-            self.log_listbox.insert("end", f"{idx+1:04d}  {img.name}")
-        total = len(self.log_images)
-        cur = 0 if self.log_index < 0 else self.log_index + 1
-        self.log_index_label.configure(text=f"{cur} / {total}")
-        if 0 <= self.log_index < len(self.log_images):
-            try:
-                self.log_listbox.selection_clear(0, "end")
-                self.log_listbox.selection_set(self.log_index)
-                self.log_listbox.see(self.log_index)
-            except Exception:
-                pass
-
-    def on_log_list_select(self) -> None:
-        try:
-            sel = self.log_listbox.curselection()
-            if not sel:
-                return
-            idx = int(sel[0])
-        except Exception:
-            return
-        self.show_log_image(idx)
-
-    def show_log_image(self, idx: int) -> None:
-        if not self.log_images or idx < 0 or idx >= len(self.log_images):
-            self.log_canvas.delete("all")
-            self.log_canvas.create_text(
-                50,
-                50,
-                text="未加载任何图片",
-                fill="#9a9a9a",
-                anchor="nw",
-                font=("Arial", 14),
-            )
-            self.log_image_pil = None
-            self.refresh_log_listbox()
-            return
-
-        path = self.log_images[idx]
-        try:
-            self.log_image_pil = Image.open(path)
-        except Exception as e:
-            messagebox.showerror("打开失败", f"打开图片失败：\n{e}")
-            self.log_image_pil = None
-            return
-
-        self.log_index = idx
-        self.refresh_log_listbox()
-        self.redraw_log_image()
-
-    def redraw_log_image(self) -> None:
-        if self.log_image_pil is None:
-            return
-
-        canvas_w = max(1, int(self.log_canvas.winfo_width()))
-        canvas_h = max(1, int(self.log_canvas.winfo_height()))
-        img_w, img_h = self.log_image_pil.size
-        img_ratio = img_w / max(1, img_h)
-        canvas_ratio = canvas_w / max(1, canvas_h)
-
-        if img_ratio > canvas_ratio:
-            disp_w = canvas_w
-            disp_h = int(canvas_w / img_ratio)
-        else:
-            disp_h = canvas_h
-            disp_w = int(canvas_h * img_ratio)
-        disp_w = max(1, disp_w)
-        disp_h = max(1, disp_h)
-
-        resized = self.log_image_pil.resize((disp_w, disp_h), Image.LANCZOS)
-        self.log_tk_photo = ImageTk.PhotoImage(resized)
-        ox = int((canvas_w - disp_w) / 2)
-        oy = int((canvas_h - disp_h) / 2)
-
-        self.log_canvas.delete("all")
-        self.log_canvas.create_image(ox, oy, image=self.log_tk_photo, anchor="nw")
-
-    def step_log(self, delta: int) -> None:
-        if not self.log_images:
-            return
-        idx = self.log_index + delta
-        idx = max(0, min(len(self.log_images) - 1, idx))
-        self.show_log_image(idx)
 
     # ==================== 步骤生成器方法 ====================
 
