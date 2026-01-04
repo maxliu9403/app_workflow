@@ -30,6 +30,19 @@ class ExtensionManager:
             print(f"Error loading custom nodes: {e}")
             return []
 
+    def load_actions_map(self):
+        """Return dict mapping {ActionName: FunctionName} for the runner"""
+        try:
+            nodes = self.load_nodes_metadata()
+            mapping = {}
+            for n in nodes:
+                # Only include valid entries that have both name and function_name
+                if "name" in n and "function_name" in n:
+                    mapping[n["name"]] = n["function_name"]
+            return mapping
+        except Exception:
+            return {}
+
     def load_custom_functions(self):
         """Import custom_actions.py and return {func_name: function}"""
         if not os.path.exists(self.ACTION_FILE):

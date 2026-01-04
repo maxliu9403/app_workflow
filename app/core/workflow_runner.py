@@ -25,7 +25,7 @@ JSON 格式示例：
 
 Usage:
     from adbutils import adb
-    from workflow_runner import WorkflowRunner
+    from app.core.workflow_runner import WorkflowRunner
 
     device = adb.device()
     runner = WorkflowRunner(device)
@@ -43,7 +43,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-from extension_manager import ExtensionManager
+from app.extension_manager import ExtensionManager
 
 # 配置日志
 logging.basicConfig(
@@ -1143,7 +1143,7 @@ if __name__ == "__main__":
     print("\n💡 使用示例:")
     print("""
     from adbutils import adb
-    from workflow_runner import WorkflowRunner
+    from app.core.workflow_runner import WorkflowRunner
 
     device = adb.device()
     runner = WorkflowRunner(device)
