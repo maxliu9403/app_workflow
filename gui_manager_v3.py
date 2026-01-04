@@ -1277,25 +1277,25 @@ class VintedAutomationConsole:
             font=ctk.CTkFont(size=14, weight="bold"),
         ).grid(row=0, column=0, sticky="w")
         
-        # V7.10: Expand Button
+        # V7.10: Expand/Pop-out Button
         self.expand_btn = ctk.CTkButton(
-            node_header, text="↕ 展开", width=60, height=24, fg_color="#555",
-            command=self._toggle_canvas_expand
+            node_header, text="⬜ 独立窗口", width=80, height=24, fg_color="#555",
+            command=self._toggle_canvas_popout
         )
         self.expand_btn.grid(row=0, column=1, sticky="e")
 
-        # 节点画布 (使用 orch_canvas)
-        canvas_container = ctk.CTkFrame(self.center_panel)
-        canvas_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
-        canvas_container.grid_rowconfigure(0, weight=1)
-        canvas_container.grid_columnconfigure(0, weight=1)
+        # 节点画布 (使用 orch_canvas) - Store reference for pop-out
+        self.canvas_container = ctk.CTkFrame(self.center_panel)
+        self.canvas_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
+        self.canvas_container.grid_rowconfigure(0, weight=1)
+        self.canvas_container.grid_columnconfigure(0, weight=1)
         
-        self.orch_canvas = tk.Canvas(canvas_container, bg="#1e1e1e", highlightthickness=0)
+        self.orch_canvas = tk.Canvas(self.canvas_container, bg="#1e1e1e", highlightthickness=0)
         self.orch_canvas.grid(row=0, column=0, sticky="nsew")
         
         # 滚动条
-        h_scroll = tk.Scrollbar(canvas_container, orient="horizontal", command=self.orch_canvas.xview)
-        v_scroll = tk.Scrollbar(canvas_container, orient="vertical", command=self.orch_canvas.yview)
+        h_scroll = tk.Scrollbar(self.canvas_container, orient="horizontal", command=self.orch_canvas.xview)
+        v_scroll = tk.Scrollbar(self.canvas_container, orient="vertical", command=self.orch_canvas.yview)
         h_scroll.grid(row=1, column=0, sticky="ew")
         v_scroll.grid(row=0, column=1, sticky="ns")
         self.orch_canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
@@ -1309,6 +1309,11 @@ class VintedAutomationConsole:
         self.orch_canvas.bind("<B2-Motion>", self._orch_on_canvas_pan_drag)
         self.orch_canvas.bind("<Control-ButtonPress-1>", self._orch_on_canvas_pan_start)
         self.orch_canvas.bind("<Control-B1-Motion>", self._orch_on_canvas_pan_drag)
+        
+        # V7.12: Right-click context menu and Delete key
+        self.orch_canvas.bind("<Button-3>", self._orch_on_canvas_right_click)
+        self.orch_canvas.bind("<Delete>", self._orch_delete_selected_node)
+        self.orch_canvas.bind("<BackSpace>", self._orch_delete_selected_node)
         
         self._orch_draw_grid()
 
@@ -1519,72 +1524,131 @@ class VintedAutomationConsole:
         )
         self.btn_clear_gen_coords.grid(row=0, column=1, sticky="ew", padx=(5, 0), pady=6)
 
-    # V7.10: Canvas Expand/Collapse Toggle
-    def _toggle_canvas_expand(self):
-        if self._canvas_expanded:
-            # Collapse: Restore side panels with original grid config
-            self.left_panel.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
-            self.control_panel.grid(row=0, column=2, sticky="nsew", padx=5, pady=10)
-            self.screenshot_panel.grid(row=0, column=3, sticky="nsew", padx=(5, 10), pady=10)
-            self.center_panel.grid(row=0, column=1, sticky="nsew", padx=5, pady=10)
-            
-            # Hide compact toolbar
-            if hasattr(self, 'compact_toolbar'):
-                self.compact_toolbar.grid_remove()
-            
-            self.expand_btn.configure(text="↕ 展开")
-            self._canvas_expanded = False
+    # V7.11: Canvas Pop-out to Separate Window
+    def _toggle_canvas_popout(self):
+        """Pop out the canvas to a separate window, or dock it back"""
+        if hasattr(self, '_canvas_window') and self._canvas_window and self._canvas_window.winfo_exists():
+            # Already popped out - dock it back
+            self._dock_canvas()
         else:
-            # Expand: Hide side panels, make canvas full width
-            self.left_panel.grid_remove()
-            self.control_panel.grid_remove()
-            self.screenshot_panel.grid_remove()
+            # Pop out to new window
+            self._popout_canvas()
+    
+    def _popout_canvas(self):
+        """Move canvas to a separate floating window"""
+        # 1. Create new Toplevel window
+        self._canvas_window = ctk.CTkToplevel(self.root)
+        self._canvas_window.title("🎨 工作流画布 - 独立窗口")
+        self._canvas_window.geometry("1200x800")
+        self._canvas_window.configure(fg_color="#1a1a1a")
+        
+        # Handle window close
+        self._canvas_window.protocol("WM_DELETE_WINDOW", self._dock_canvas)
+        
+        # 2. Create placeholder in original location
+        self._canvas_placeholder = ctk.CTkFrame(self.center_panel, fg_color="#2a2a2a")
+        self._canvas_placeholder.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
+        
+        placeholder_label = ctk.CTkLabel(
+            self._canvas_placeholder, 
+            text="📺 画布已在独立窗口中打开\n\n点击「收回画布」按钮或关闭独立窗口\n可将画布嵌入回主界面",
+            font=("Arial", 14),
+            text_color="#888"
+        )
+        placeholder_label.pack(expand=True)
+        
+        dock_btn = ctk.CTkButton(
+            self._canvas_placeholder, text="⬅ 收回画布", width=120, height=36,
+            fg_color="#27ae60", command=self._dock_canvas
+        )
+        dock_btn.pack(pady=20)
+        
+        # 3. Hide original container and move canvas to new window
+        self.canvas_container.grid_remove()
+        
+        # 4. Create new container in popup window
+        self._popup_container = ctk.CTkFrame(self._canvas_window, fg_color="#1e1e1e")
+        self._popup_container.pack(fill="both", expand=True, padx=10, pady=10)
+        self._popup_container.grid_rowconfigure(0, weight=1)
+        self._popup_container.grid_columnconfigure(0, weight=1)
+        
+        # 5. Reparent canvas to popup - MUST use grid_forget first to release from old manager
+        self.orch_canvas.grid_forget()
+        self.orch_canvas.configure(bg="#1e1e1e")
+        
+        # Recreate canvas in popup (simpler than reparenting due to Tkinter limitations)
+        self._original_canvas = self.orch_canvas  # Keep reference
+        self._popup_canvas = tk.Canvas(self._popup_container, bg="#1e1e1e", highlightthickness=0)
+        self._popup_canvas.pack(fill="both", expand=True)
+        
+        # Copy canvas bindings
+        self._popup_canvas.bind("<Button-1>", self._orch_on_canvas_click)
+        self._popup_canvas.bind("<B1-Motion>", self._orch_on_canvas_drag)
+        self._popup_canvas.bind("<ButtonRelease-1>", self._orch_on_canvas_release)
+        self._popup_canvas.bind("<Double-Button-1>", self._orch_on_canvas_double_click)
+        self._popup_canvas.bind("<ButtonPress-2>", self._orch_on_canvas_pan_start)
+        self._popup_canvas.bind("<B2-Motion>", self._orch_on_canvas_pan_drag)
+        self._popup_canvas.bind("<Control-ButtonPress-1>", self._orch_on_canvas_pan_start)
+        self._popup_canvas.bind("<Control-B1-Motion>", self._orch_on_canvas_pan_drag)
+        
+        # V7.12: Add missing bindings for popup canvas
+        self._popup_canvas.bind("<Button-3>", self._orch_on_canvas_right_click)
+        self._popup_canvas.bind("<Delete>", self._orch_delete_selected_node)
+        self._popup_canvas.bind("<BackSpace>", self._orch_delete_selected_node)
+        
+        # Swap canvas reference
+        self.orch_canvas = self._popup_canvas
+        
+        # 6. Add toolbar in popup window
+        popup_toolbar = ctk.CTkFrame(self._canvas_window, height=50, fg_color="#222")
+        popup_toolbar.pack(fill="x", side="bottom", padx=10, pady=(0, 10))
+        
+        ctk.CTkButton(popup_toolbar, text="▶️ 运行全部", fg_color="#27ae60", width=100,
+                      command=self._orch_run_all).pack(side="left", padx=5, pady=5)
+        ctk.CTkButton(popup_toolbar, text="💾 保存", fg_color="#3498db", width=80,
+                      command=self._orch_export_json).pack(side="left", padx=5, pady=5)
+        ctk.CTkButton(popup_toolbar, text="📂 加载", fg_color="#555", width=80,
+                      command=self._orch_import_json).pack(side="left", padx=5, pady=5)
+        
+        ctk.CTkButton(popup_toolbar, text="⬅ 收回画布", fg_color="#e74c3c", width=100,
+                      command=self._dock_canvas).pack(side="right", padx=5, pady=5)
+        
+        # 7. Update button in main window
+        self.expand_btn.configure(text="⬅ 收回", fg_color="#e74c3c")
+        
+        # 8. Redraw canvas grid
+        self._orch_draw_grid()
+    
+    def _dock_canvas(self):
+        """Move canvas back to main window"""
+        if not hasattr(self, '_canvas_window') or not self._canvas_window:
+            return
             
-            # Make canvas span all columns (row 0)
-            self.center_panel.grid(row=0, column=0, columnspan=4, sticky="nsew", padx=5, pady=(10, 5))
-            
-            # Create/Show compact toolbar below canvas (row 1)
-            if not hasattr(self, 'compact_toolbar'):
-                self._create_compact_toolbar()
-            self.compact_toolbar.grid(row=1, column=0, columnspan=4, sticky="ew", padx=5, pady=(0, 10))
-            
-            self.expand_btn.configure(text="↕ 收起")
-            self._canvas_expanded = True
-
-    def _create_compact_toolbar(self):
-        """Create a compact toolbar for use in expanded mode"""
-        self.compact_toolbar = ctk.CTkFrame(self.tab_designer, height=50, fg_color="#2a2a2a")
+        # 1. Remove placeholder
+        if hasattr(self, '_canvas_placeholder') and self._canvas_placeholder:
+            self._canvas_placeholder.destroy()
+            self._canvas_placeholder = None
         
-        ctk.CTkLabel(self.compact_toolbar, text="🧩 快捷节点:", font=("Arial", 12)).pack(side="left", padx=10)
+        # 2. Restore original canvas reference
+        if hasattr(self, '_original_canvas') and self._original_canvas:
+            self.orch_canvas = self._original_canvas
+            self.orch_canvas.grid(row=0, column=0, sticky="nsew")
         
-        # Quick add buttons for common node types
-        quick_actions = [
-            ("🖱️ 点击", "Click Region"),
-            ("⏱️ 等待", "Wait Time"),
-            ("⌨️ 输入", "Input Text (Base64)"),
-            ("👆 滑动", "Swipe"),
-            ("🔁 循环", "LOOP (Count)"),
-        ]
+        # 3. Show original container
+        self.canvas_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
         
-        for label, action in quick_actions:
-            ctk.CTkButton(
-                self.compact_toolbar, text=label, width=60, height=28, fg_color="#444",
-                command=lambda a=action: self._add_node_to_canvas(a)
-            ).pack(side="left", padx=3)
+        # 4. Destroy popup window (this also destroys popup canvas)
+        if self._canvas_window and self._canvas_window.winfo_exists():
+            self._canvas_window.destroy()
+        self._canvas_window = None
+        self._popup_canvas = None
+        self._original_canvas = None
         
-        # Spacer
-        ctk.CTkFrame(self.compact_toolbar, width=20, fg_color="transparent").pack(side="left", expand=True)
+        # 5. Update button
+        self.expand_btn.configure(text="⬜ 独立窗口", fg_color="#555")
         
-        # Control buttons on the right
-        ctk.CTkButton(
-            self.compact_toolbar, text="▶️ 运行", width=60, height=28, fg_color="#27ae60",
-            command=self._orch_run_all
-        ).pack(side="right", padx=5)
-        
-        ctk.CTkButton(
-            self.compact_toolbar, text="💾 保存", width=60, height=28, fg_color="#3498db",
-            command=self._orch_export_json
-        ).pack(side="right", padx=3)
+        # 6. Redraw canvas grid
+        self._orch_draw_grid()
 
     def _make_labeled_entry(
         self,
@@ -4745,9 +4809,85 @@ Step {i}: {action}
             # 失败则按创建顺序 (这里用ID/StepName fallback)
             nodes.sort(key=lambda n: n.step_name)
         
+        # Cache the sorted node IDs for listbox selection mapping
+        self._orch_listbox_cache = [n.id for n in nodes]
+        
         for node in nodes:
             display = f"{node.step_name}: {node.action_type}"
             self.gen_queue_listbox.insert(tk.END, display)
+
+    def _orch_scroll_to_node(self, node_id: str) -> None:
+        """Scroll canvas to center the specified node"""
+        node = self.orch_nodes.get(node_id)
+        if not node or not hasattr(self, 'orch_canvas'):
+            return
+            
+        try:
+            # 1. Force update scrollregion to ensure it includes all nodes
+            self.orch_canvas.update_idletasks() # Ensure layout is up to date
+            bbox = self.orch_canvas.bbox("all")
+            if not bbox:
+                return
+            
+            # Update scrollregion
+            self.orch_canvas.configure(scrollregion=bbox)
+            
+            # 2. Get region dimensions
+            min_x, min_y, max_x, max_y = bbox
+            total_w = max_x - min_x
+            total_h = max_y - min_y
+            
+            # Canvas viewport dimensions
+            view_w = self.orch_canvas.winfo_width()
+            view_h = self.orch_canvas.winfo_height()
+            
+            # Node center coordinates (assuming ~160x70 size)
+            node_cx = node.canvas_x + 80
+            node_cy = node.canvas_y + 35
+            
+            # 3. Calculate scroll fraction (xview_moveto/yview_moveto accept 0.0-1.0)
+            # 0.0 means viewport left/top is at min_x/min_y
+            # 1.0 means viewport right/bottom is at max_x/max_y (approximately)
+            # Formula: fraction = (target_edge - min_edge) / total_dimension
+            
+            if total_w > view_w and total_w > 0:
+                # We want node_cx to be at center of viewport
+                # viewport_left = node_cx - view_w / 2
+                target_left = node_cx - (view_w / 2)
+                
+                # Clamp target_left within bounds [min_x, max_x - view_w]
+                if target_left < min_x: target_left = min_x
+                if target_left > max_x - view_w: target_left = max_x - view_w
+                
+                fraction_x = (target_left - min_x) / total_w
+                self.orch_canvas.xview_moveto(fraction_x)
+                
+            if total_h > view_h and total_h > 0:
+                target_top = node_cy - (view_h / 2)
+                
+                # Clamp
+                if target_top < min_y: target_top = min_y
+                if target_top > max_y - view_h: target_top = max_y - view_h
+                
+                fraction_y = (target_top - min_y) / total_h
+                self.orch_canvas.yview_moveto(fraction_y)
+                
+        except Exception as e:
+            print(f"Auto-scroll error: {e}")
+
+    def _on_node_list_select(self, event) -> None:
+        """Handle selection from the node listbox"""
+        selection = self.gen_queue_listbox.curselection()
+        if not selection:
+            return
+            
+        idx = selection[0]
+        if hasattr(self, '_orch_listbox_cache') and 0 <= idx < len(self._orch_listbox_cache):
+            node_id = self._orch_listbox_cache[idx]
+            self._orch_select_node(node_id)
+            self._orch_scroll_to_node(node_id)
+            # Focus properly on canvas is sometimes desired, but listbox focus is also fine.
+            # self.orch_canvas.focus_set()
 
     def _orch_add_node_from_palette(self, action_type: str) -> None:
         """从节点库添加节点到画布中心"""
@@ -4785,6 +4925,7 @@ Step {i}: {action}
         w, h = 160, 70
         r = 8  # 圆角半径
         is_selected = self.orch_selected_node == node.id
+        is_running = hasattr(self, 'orch_running_node') and self.orch_running_node == node.id
 
         # 清除旧的绘制
         if node.id in self.orch_node_canvas_items:
@@ -4792,6 +4933,24 @@ Step {i}: {action}
                 self.orch_canvas.delete(item_id)
 
         items = []
+        
+        # V7.12: Running glow effect (pulsing border)
+        if is_running:
+            # Outer glow
+            glow_id = self.orch_canvas.create_rectangle(
+                x - 6, y - 6, x + w + 6, y + h + 6,
+                fill="", outline="#ff0000", width=4,
+                tags=("node", f"node_{node.id}", "running_glow"),
+            )
+            items.append(glow_id)
+            
+            # Second glow layer
+            glow2_id = self.orch_canvas.create_rectangle(
+                x - 3, y - 3, x + w + 3, y + h + 3,
+                fill="", outline="#ff4444", width=2,
+                tags=("node", f"node_{node.id}", "running_glow"),
+            )
+            items.append(glow2_id)
         
         # 阴影效果
         shadow_id = self.orch_canvas.create_rectangle(
@@ -4803,8 +4962,15 @@ Step {i}: {action}
 
         # 节点背景
         bg_color = style["color"]
-        outline_color = "#ffffff" if is_selected else "#333333"
-        outline_width = 3 if is_selected else 1
+        if is_running:
+            outline_color = "#ff0000"
+            outline_width = 4
+        elif is_selected:
+            outline_color = "#ffff00"  # Yellow for selection
+            outline_width = 3
+        else:
+            outline_color = "#333333"
+            outline_width = 1
         
         rect_id = self.orch_canvas.create_rectangle(
             x, y, x + w, y + h,
@@ -5185,6 +5351,178 @@ Step {i}: {action}
                 self.orch_prop_name_entry.focus_set()
                 self.orch_prop_name_entry.select_range(0, tk.END)
 
+    # V7.12: Right-click context menu for nodes
+    def _orch_on_canvas_right_click(self, event) -> None:
+        """Show context menu on right-click"""
+        cx = self.orch_canvas.canvasx(event.x)
+        cy = self.orch_canvas.canvasy(event.y)
+        
+        # Find clicked node
+        items = self.orch_canvas.find_overlapping(cx - 5, cy - 5, cx + 5, cy + 5)
+        clicked_node_id = None
+        for item in items:
+            tags = self.orch_canvas.gettags(item)
+            for tag in tags:
+                if tag.startswith("node_"):
+                    clicked_node_id = tag.replace("node_", "")
+                    break
+            if clicked_node_id:
+                break
+        
+        if not clicked_node_id or clicked_node_id not in self.orch_nodes:
+            self._orch_deselect_node()
+            return
+            
+        # Select the node and set focus (Critical for keyboard events)
+        self._orch_select_node(clicked_node_id)
+        self.orch_canvas.focus_set()
+        
+        # Create custom context menu (Gemini UI Style)
+        self._show_custom_context_menu(event.x_root, event.y_root, clicked_node_id)
+
+    def _create_context_menu_item(self, parent, text, command, text_color="#dddddd", hover_color="#3a3a3a"):
+        """Helper to create stylized menu items"""
+        btn = ctk.CTkButton(
+            parent, text=text, command=lambda: [self._close_context_menu(), command()],
+            fg_color="transparent", hover_color=hover_color, text_color=text_color,
+            anchor="w", height=32, corner_radius=4, font=("Segoe UI", 12)
+        )
+        btn.pack(fill="x", padx=4, pady=2)
+        return btn
+
+    def _close_context_menu(self, event=None):
+        """Close the custom context menu"""
+        if hasattr(self, '_context_menu_window') and self._context_menu_window:
+            self._context_menu_window.destroy()
+            self._context_menu_window = None
+
+    def _show_custom_context_menu(self, x, y, node_id):
+        """Show a modern, dark-themed context menu using CTkToplevel"""
+        self._close_context_menu()
+        
+        node = self.orch_nodes[node_id]
+        
+        # Create Toplevel for menu
+        menu = ctk.CTkToplevel()
+        menu.overrideredirect(True)
+        menu.attributes("-topmost", True)
+        menu.geometry(f"+{x}+{y}")
+        self._context_menu_window = menu
+        
+        # Close when losing focus (simulated click-outside behavior)
+        menu.bind("<FocusOut>", lambda e: self._close_context_menu() if str(e.widget) == str(menu) else None)
+        # Force focus to capture FocusOut
+        menu.after(50, menu.focus_set)
+        
+        # Main container with border
+        frame = ctk.CTkFrame(menu, fg_color="#2b2b2b", border_width=1, border_color="#444444", corner_radius=8)
+        frame.pack(fill="both", expand=True)
+        
+        # Header
+        lbl = ctk.CTkLabel(frame, text=f"  📌 {node.step_name}", anchor="w", font=("Segoe UI", 12, "bold"), text_color="#888")
+        lbl.pack(fill="x", pady=(6, 4), padx=4)
+        
+        ctk.CTkFrame(frame, height=1, fg_color="#444").pack(fill="x", pady=2, padx=4)
+        
+        # Items
+        self._create_context_menu_item(frame, "  🧪  单点测试", lambda: self._orch_test_node_by_id(node_id))
+        
+        bp_label = "  🔴  移除断点" if "[BREAKPOINT]" in node.context else "  🔵  设置断点"
+        self._create_context_menu_item(frame, bp_label, lambda: self._orch_toggle_breakpoint_by_id(node_id))
+        
+        ctk.CTkFrame(frame, height=1, fg_color="#444").pack(fill="x", pady=2, padx=4)
+        
+        self._create_context_menu_item(frame, "  ✏️  修改名称", lambda: self._orch_rename_node_dialog(node_id))
+        self._create_context_menu_item(frame, "  🔌  断开连接", lambda: self._orch_disconnect_node(node_id))
+        
+        ctk.CTkFrame(frame, height=1, fg_color="#444").pack(fill="x", pady=2, padx=4)
+        
+        self._create_context_menu_item(frame, "  🗑️  删除节点", lambda: self._orch_delete_node(node_id), text_color="#ff5555", hover_color="#4a1a1a")
+        
+        # Add a transparent overlay or bind click events to close? 
+        # FocusOut is mostly sufficient, but sometimes unreliable on Windows if clicks land on non-focusable windows.
+        # Adding an explicit 'Leave' or 'FocusOut' is improved by grab_set, but grab_set stops outside interaction.
+        # We'll stick to focus logic. A click outside usually triggers focus change.
+
+    def _orch_delete_selected_node(self, event=None) -> None:
+        """Delete currently selected node via keyboard"""
+        if self.orch_selected_node:
+            self._orch_delete_node(self.orch_selected_node)
+
+    def _orch_delete_node(self, node_id: str) -> None:
+        """Delete a node and its connections"""
+        if node_id not in self.orch_nodes:
+            return
+            
+        node = self.orch_nodes[node_id]
+        node_name = node.step_name
+        
+        # 1. Remove all connections involving this node
+        self._orch_disconnect_node(node_id)
+        
+        # 2. Remove canvas items
+        if node_id in self.orch_node_canvas_items:
+            for item_id in self.orch_node_canvas_items[node_id]:
+                self.orch_canvas.delete(item_id)
+            del self.orch_node_canvas_items[node_id]
+        
+        # 3. Remove from nodes dict
+        del self.orch_nodes[node_id]
+        
+        # 4. Clear selection
+        if self.orch_selected_node == node_id:
+            self._orch_deselect_node()
+        
+        # 5. Refresh listbox
+        self._orch_refresh_listbox()
+        
+        self.log(f"[编排] 🗑️ 已删除节点: {node_name}")
+
+    def _orch_disconnect_node(self, node_id: str) -> None:
+        """Disconnect all connections from/to a node"""
+        if node_id not in self.orch_nodes:
+            return
+            
+        # Find connections to remove
+        conns_to_remove = [
+            (from_id, to_id) for from_id, to_id in self.orch_connections 
+            if from_id == node_id or to_id == node_id
+        ]
+        
+        # Remove connection lines and entries
+        for from_id, to_id in conns_to_remove:
+            key = (from_id, to_id)
+            if key in self.orch_connection_lines:
+                for item_id in self.orch_connection_lines[key]:
+                    self.orch_canvas.delete(item_id)
+                del self.orch_connection_lines[key]
+            self.orch_connections.remove((from_id, to_id))
+        
+        if conns_to_remove:
+            self.log(f"[编排] 🔌 已断开 {len(conns_to_remove)} 个连接")
+
+    def _orch_rename_node_dialog(self, node_id: str) -> None:
+        """Show dialog to rename a node"""
+        if node_id not in self.orch_nodes:
+            return
+            
+        node = self.orch_nodes[node_id]
+        
+        # Simple input dialog
+        from tkinter import simpledialog
+        new_name = simpledialog.askstring(
+            "修改节点名称", 
+            f"当前名称: {node.step_name}\n请输入新名称:",
+            initialvalue=node.step_name,
+            parent=self.root
+        )
+        
+        if new_name and new_name.strip():
+            node.step_name = new_name.strip()
+            self._orch_draw_node(node)
+            self._orch_refresh_listbox()
+            self.log(f"[编排] ✏️ 节点已重命名为: {new_name}")
+
     def _orch_select_node(self, node_id: str) -> None:
         """选中节点"""
         self.orch_selected_node = node_id
@@ -5418,6 +5756,7 @@ Step {i}: {action}
         self.orch_connection_lines.clear()
         self._orch_deselect_node()
         self._orch_draw_grid()
+        self._orch_refresh_listbox()
         self.log("[编排] 画布已清空")
 
     def _orch_export_json(self) -> None:
@@ -5657,6 +5996,7 @@ Step {i}: {action}
                 self.root.update()
 
             # 恢复节点样式
+            self.orch_running_node = None
             self.root.after(2000, self._orch_draw_all_nodes)
 
             # 汇总结果
@@ -5675,12 +6015,18 @@ Step {i}: {action}
             messagebox.showerror("执行失败", str(e))
             
     def _orch_highlight_executing_node(self, node_id: str) -> None:
-        """高亮正在执行的节点（黄色边框）"""
-        if node_id not in self.orch_node_canvas_items:
-            return
-        items = self.orch_node_canvas_items[node_id]
-        if items:
-            self.orch_canvas.itemconfig(items[0], outline="#FFD700", width=4)
+        """高亮正在执行的节点（黄色边框）并自动滚动"""
+        self._orch_set_running_node(node_id)
+            
+    def _orch_set_running_node(self, node_id: str) -> None:
+        """设置当前运行节点，重绘并自动滚动"""
+        self.orch_running_node = node_id
+        
+        # Redraw ALL nodes to ensure previous running node is cleared
+        self._orch_draw_all_nodes()
+        
+        # Auto-scroll using shared helper
+        self._orch_scroll_to_node(node_id)
             
     def _orch_mark_node_success(self, node_id: str) -> None:
         """标记节点执行成功（绿色边框）"""
@@ -6128,9 +6474,28 @@ Step {i}: {action}
         refresh_list()
 
     def run(self) -> None:
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        except KeyboardInterrupt:
+            self.root.destroy()
+            sys.exit(0)
 
 
 if __name__ == "__main__":
+    import signal
+    import sys
+
+    def signal_handler(sig, frame):
+        print("\n[系统] 🛑 捕获 Ctrl+C，程序正在退出...")
+        try:
+            if 'app' in globals() and app.root.winfo_exists():
+                app.root.quit()
+                app.root.destroy()
+        except Exception:
+            pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
     app = VintedAutomationConsole()
     app.run()
