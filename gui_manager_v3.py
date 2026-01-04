@@ -2,7 +2,6 @@ import re
 import time
 import json
 import uuid
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -14,162 +13,22 @@ from tkinter import filedialog, messagebox
 import tkinter as tk
 from tkinter import ttk
 
-
 import cv2
 from adbutils import adb
 from adbutils.errors import AdbError
 from extension_manager import ExtensionManager
 
+# Import from core module for better code organization
+from core.models import RoiPct, WorkflowNode
+from core.constants import ACTION_CATEGORIES, NODE_STYLES, NODE_PARAM_SHORTCUTS, LOGIC_ACTIONS
 
-@dataclass
-class RoiPct:
-    x1: float
-    y1: float
-    x2: float
-    y2: float
-
-    def normalized(self) -> "RoiPct":
-        x1 = float(min(self.x1, self.x2))
-        x2 = float(max(self.x1, self.x2))
-        y1 = float(min(self.y1, self.y2))
-        y2 = float(max(self.y1, self.y2))
-        return RoiPct(x1=x1, y1=y1, x2=x2, y2=y2)
-
-    def clipped(self) -> "RoiPct":
-        x1 = float(max(0.0, min(1.0, self.x1)))
-        x2 = float(max(0.0, min(1.0, self.x2)))
-        y1 = float(max(0.0, min(1.0, self.y1)))
-        y2 = float(max(0.0, min(1.0, self.y2)))
-        return RoiPct(x1=x1, y1=y1, x2=x2, y2=y2)
-
-    def center(self) -> Tuple[float, float]:
-        r = self.normalized()
-        return (float((r.x1 + r.x2) / 2.0), float((r.y1 + r.y2) / 2.0))
+# Import Mixins for modular code organization
+from gui.device_mixin import DeviceMixin
+from gui.live_debugger_mixin import LiveDebuggerMixin
+from gui.workflow_designer_mixin import WorkflowDesignerMixin
 
 
-@dataclass
-class WorkflowNode:
-    """工作流节点数据结构"""
-    id: str                                # 唯一标识
-    action_type: str                       # 动作类型
-    step_name: str = ""                    # 步骤名称
-    params: str = ""                       # 参数
-    context: str = ""                      # 上下文备注
-    coords: Dict[str, float] = field(default_factory=lambda: {"x1": 0, "y1": 0, "x2": 0, "y2": 0})
-    canvas_x: int = 100                    # 画布 X 位置
-    canvas_y: int = 100                    # 画布 Y 位置
-    retry_count: int = 0                   # 重试次数
-    is_optional: bool = False              # 是否可选步骤
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式（用于 JSON 导出）"""
-        return {
-            "step_name": self.step_name,
-            "action_type": self.action_type,
-            "params": self.params,
-            "context": self.context,
-            "coords": self.coords,
-            "retry_count": self.retry_count,
-            "is_optional": self.is_optional,
-        }
-
-
-# V5.0: 分类节点配置
-ACTION_CATEGORIES = {
-    "👆 Interaction": {
-        "Click Region": {"icon": "🖱️", "color": "#4CAF50", "label": "点击区域"},
-        "Click Text": {"icon": "🔤", "color": "#8BC34A", "label": "点击文字"},
-        "Swipe": {"icon": "👆", "color": "#FF9800", "label": "滑动"},
-        "Long Press": {"icon": "👇", "color": "#FF5722", "label": "长按"},
-    },
-    "⌨️ Input": {
-        "Input Text (Base64)": {"icon": "⌨️", "color": "#2196F3", "label": "输入文本(中文)"},
-        "Input Text (Native)": {"icon": "📝", "color": "#03A9F4", "label": "输入文本(英文)"},
-        "Click & Check Keyboard": {"icon": "⌨️", "color": "#00BCD4", "label": "点击并验证键盘"},
-    },
-    "👁️ Vision": {
-        "Check Text": {"icon": "✓", "color": "#009688", "label": "检查文字"},
-        "Check Image": {"icon": "🖼️", "color": "#795548", "label": "检查图片"},
-        "Wait Text": {"icon": "⏳", "color": "#673AB7", "label": "等待文字"},
-        "Wait Element": {"icon": "🔍", "color": "#3F51B5", "label": "等待元素"},
-        "Assert Exists": {"icon": "⚠️", "color": "#F44336", "label": "断言存在"},
-        "Wait Until Disappear": {"icon": "👻", "color": "#E91E63", "label": "等待消失"},
-    },
-    "🔀 Logic": {
-        "IF (Check Text)": {"icon": "❓", "color": "#9C27B0", "label": "条件(文字)"},
-        "IF (Check Image)": {"icon": "❓", "color": "#7B1FA2", "label": "条件(图片)"},
-        "ELSE": {"icon": "↩️", "color": "#6A1B9A", "label": "否则"},
-        "END IF": {"icon": "⏹️", "color": "#4A148C", "label": "结束条件"},
-        # V6.0: LOOP 节点
-        "LOOP (Count)": {"icon": "🔁", "color": "#7C4DFF", "label": "循环(次数)"},
-        "LOOP (Until Text)": {"icon": "🔁", "color": "#651FFF", "label": "循环(直到文字)"},
-        "BREAK": {"icon": "⏹️", "color": "#D500F9", "label": "跳出循环"},
-        "END LOOP": {"icon": "🔚", "color": "#AA00FF", "label": "循环结束"},
-    },
-    "⚙️ System": {
-        "Wait Time": {"icon": "⏱️", "color": "#607D8B", "label": "等待时间"},
-    },
-}
-
-# 逻辑节点列表（不执行人类延迟）
-LOGIC_ACTIONS = {
-    "IF (Check Text)", "IF (Check Image)", "ELSE", "END IF",
-    "LOOP (Count)", "LOOP (Until Text)", "BREAK", "END LOOP"
-}
-
-# 兼容 V4: 扁平化 NODE_STYLES
-NODE_STYLES = {}
-for _cat, _actions in ACTION_CATEGORIES.items():
-    for _action_type, _style in _actions.items():
-        NODE_STYLES[_action_type] = _style
-
-# V7.6: 动作参数快捷键配置 (Value, Label/Comment)
-NODE_PARAM_SHORTCUTS = {
-    "Wait Time": [
-        ("1.0", "等待 1 秒"), ("2.0", "等待 2 秒"), ("3.0", "等待 3 秒"),
-        ("5.0", "等待 5 秒"), ("random(2,5)", "随机 2-5 秒")
-    ],
-    "Input Text (Base64)": [
-        ("Hello", "输入 Hello"), ("Test", "输入测试文本"), 
-        ("Username", "输入用户名"), ("Password", "输入密码"),
-        ("{clipboard}", "粘贴剪贴板")
-    ],
-    "Input Text (Native)": [
-        ("123", "输入数字"), ("abc", "输入字母")
-    ],
-    "Key Event": [
-        ("3", "Home键 (3)"), ("4", "返回键 (4)"), ("66", "回车键 (66)"),
-        ("26", "电源键 (26)"), ("61", "Tab键 (61)"), ("67", "退格键 (67)")
-    ],
-    "Click Text": [
-        ("Login", "登录"), ("Confirm", "确认"), ("Cancel", "取消"),
-        ("Next", "下一步"), ("Skip", "跳过"), ("Allow", "允许")
-    ],
-    "Wait Text": [
-        ("Home", "首页"), ("Loaded", "加载完毕"), ("Success", "成功")
-    ],
-    "IF (Check Text)": [
-        ("Error", "错误提示"), ("Success", "成功提示"), ("Fail", "失败提示")
-    ],
-    "Loop (Count)": [
-        ("3", "循环3次"), ("5", "循环5次"), ("10", "循环10次")
-    ],
-    "Swipe": [
-        ("0.5", "快滑 (0.5s)"), ("1.0", "标准 (1.0s)"), ("2.0", "慢滑 (2.0s)")
-    ],
-    "Long Press": [
-         ("1.0", "长按1秒"), ("3.0", "长按3秒")
-    ],
-    "Wait Element": [
-        ("timeout=10", "超时10秒"), ("timeout=30", "超时30秒")
-    ],
-    "Check Image": [
-        ("0.8", "相似度0.8"), ("0.9", "相似度0.9"), ("0.95", "相似度0.95")
-    ]
-}
-
-
-class VintedAutomationConsole:
+class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMixin):
     BASE_WIDTH = 1080
     BASE_HEIGHT = 2400
 
@@ -1628,159 +1487,11 @@ class VintedAutomationConsole:
         except Exception:
             pass
 
-    def refresh_device_list(self) -> None:
-        try:
-            devices = adb.device_list()
-            serials = [d.serial for d in devices]
-        except Exception as e:
-            serials = []
-            self.log(f"获取设备列表失败：{e}")
-
-        if not serials:
-            self.device_combo.configure(values=[""])
-            self.selected_serial_var.set("")
-            self.status_label.configure(text="状态：未检测到设备", text_color="#aaaaaa")
-            return
-
-        self.device_combo.configure(values=serials)
-        if self.selected_serial_var.get() not in serials:
-            self.selected_serial_var.set(serials[0])
-        self.status_label.configure(text="状态：已检测到设备，请选择并连接", text_color="#aaaaaa")
-
-    def on_device_selected(self) -> None:
-        if self.device is not None:
-            self.status_label.configure(text="状态：已连接（切换设备需先断开）", text_color="#f0ad4e")
-
-    def connect_selected_device(self) -> None:
-        serial = (self.selected_serial_var.get() or "").strip()
-        if not serial:
-            messagebox.showwarning("提示", "请先选择设备序列号")
-            return
-        try:
-            self.device = adb.device(serial=serial)
-            self._update_device_resolution()
-            self.status_label.configure(
-                text=f"状态：已连接 {serial}（{self.phone_width}x{self.phone_height}）",
-                text_color="#66cc66",
-            )
-            self.log(f"已连接设备：{serial}")
-        except AdbError as e:
-            self.device = None
-            self.status_label.configure(text="状态：连接失败", text_color="#ff6666")
-            messagebox.showerror("连接失败", f"连接设备失败：\n{e}")
-            self.log(f"连接设备失败：{e}")
-
-    def disconnect_device(self) -> None:
-        self.device = None
-        self.phone_width = 0
-        self.phone_height = 0
-        self.screenshot_pil = None
-        self.screenshot_bgr = None
-        self.tk_photo = None
-        self.template_match_roi = None
-        self.template_bgr = None
-        self.template_path = None
-        self.template_rect_id = None
-        if hasattr(self, "template_path_label"):
-            try:
-                self.template_path_label.configure(text="未选择")
-            except Exception:
-                pass
-        self.canvas.delete("all")
-        self.canvas.create_text(
-            50,
-            50,
-            text="请先选择设备并连接，然后获取截图",
-            fill="#9a9a9a",
-            anchor="nw",
-            font=("Arial", 14),
-            tags="placeholder",
-        )
-        self.status_label.configure(text="状态：未连接", text_color="#aaaaaa")
-        self.log("已断开设备")
-
-    def _update_device_resolution(self) -> None:
-        if self.device is None:
-            return
-        try:
-            wm_size = self.device.shell("wm size")
-            m = re.search(r"(\d+)x(\d+)", wm_size)
-            if not m:
-                raise ValueError("无法解析分辨率")
-            self.phone_width = int(m.group(1))
-            self.phone_height = int(m.group(2))
-        except Exception as e:
-            raise AdbError(f"获取分辨率失败：{e}")
-
-    def require_device(self) -> bool:
-        if self.device is None:
-            messagebox.showwarning("提示", "请先选择设备并点击连接")
-            return False
-        return True
-
-    def refresh_screenshot(self) -> None:
-        if not self.require_device():
-            return
-        try:
-            self._update_device_resolution()
-            img = self.device.screenshot()
-            self.screenshot_pil = img
-            rgb = np.array(img)
-            if rgb.ndim == 3 and rgb.shape[2] == 3:
-                self.screenshot_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-            else:
-                self.screenshot_bgr = rgb
-            self.redraw_screenshot()
-            self.log("截图获取成功")
-        except AdbError as e:
-            messagebox.showerror("截图失败", f"截图失败：\n{e}")
-            self.log(f"截图失败：{e}")
-        except Exception as e:
-            messagebox.showerror("截图失败", f"截图失败：\n{e}")
-            self.log(f"截图失败：{e}")
-
-    def redraw_screenshot(self) -> None:
-        if self.screenshot_pil is None or self.phone_width <= 0 or self.phone_height <= 0:
-            return
-
-        canvas_w = max(1, int(self.canvas.winfo_width()))
-        canvas_h = max(1, int(self.canvas.winfo_height()))
-
-        img_ratio = self.phone_width / max(1, self.phone_height)
-        canvas_ratio = canvas_w / max(1, canvas_h)
-
-        if img_ratio > canvas_ratio:
-            disp_w = canvas_w
-            disp_h = int(canvas_w / img_ratio)
-        else:
-            disp_h = canvas_h
-            disp_w = int(canvas_h * img_ratio)
-
-        disp_w = max(1, disp_w)
-        disp_h = max(1, disp_h)
-
-        self.display_width = disp_w
-        self.display_height = disp_h
-        self.canvas_scale = disp_w / max(1, self.phone_width)
-        self.canvas_offset_x = int((canvas_w - disp_w) / 2)
-        self.canvas_offset_y = int((canvas_h - disp_h) / 2)
-
-        resized = self.screenshot_pil.resize((disp_w, disp_h), Image.LANCZOS)
-        self.tk_photo = ImageTk.PhotoImage(resized)
-
-        self.canvas.delete("all")
-        self.canvas.create_image(
-            self.canvas_offset_x,
-            self.canvas_offset_y,
-            image=self.tk_photo,
-            anchor="nw",
-            tags="screenshot",
-        )
-
-        self.draw_roi_from_entries()
-        self._draw_template_match_box()
-        self._draw_ocr_detections()
-        self._draw_offset_calculator()
+    # Device methods (refresh_device_list, connect_selected_device, etc.)
+    # are inherited from gui.device_mixin.DeviceMixin
+    
+    # Screenshot/coordinate methods (redraw_screenshot, copy_current_coords, etc.)
+    # are inherited from gui.live_debugger_mixin.LiveDebuggerMixin
 
     def choose_yaml_path(self) -> None:
         initial_dir = str(Path(self.yaml_path).parent) if self.yaml_path else str(Path.cwd())
@@ -1795,67 +1506,7 @@ class VintedAutomationConsole:
         self.yaml_path_var.set(str(self.yaml_path))
         self.load_yaml()
 
-    def copy_current_coords(self) -> None:
-        try:
-            x1 = float(self.x1_var.get())
-            y1 = float(self.y1_var.get())
-            x2 = float(self.x2_var.get())
-            y2 = float(self.y2_var.get())
-        except Exception:
-            messagebox.showwarning("提示", "坐标输入无效")
-            return
-        text = f"{x1:.3f}\n{y1:.3f}\n{x2:.3f}\n{y2:.3f}"
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(text)
-        except Exception as e:
-            messagebox.showwarning("提示", f"复制失败：\n{e}")
-            self.log(f"复制失败：{e}")
-            return
-        messagebox.showinfo("复制成功", "已复制到剪贴板")
-        self.log("已复制当前坐标到剪贴板")
-
-    def quick_copy_coordinates(self) -> None:
-        """
-        一键复制坐标百分比值 (增强版)
-        格式: (x1, y1) 到 (x2, y2)
-        用户偏好的高精度格式，可直接复制到UI控制面板
-        """
-        try:
-            x1 = float(self.x1_var.get())
-            y1 = float(self.y1_var.get())
-            x2 = float(self.x2_var.get())
-            y2 = float(self.y2_var.get())
-        except Exception:
-            messagebox.showwarning("提示", "坐标输入无效，请先框选区域或输入坐标值")
-            return
-        
-        # 确保 x1 < x2, y1 < y2
-        x1, x2 = min(x1, x2), max(x1, x2)
-        y1, y2 = min(y1, y2), max(y1, y2)
-        
-        # 用户偏好的高精度格式: (0.425, 0.559) 到 (0.894, 0.743)
-        quick_format = f"({x1:.3f}, {y1:.3f}) 到 ({x2:.3f}, {y2:.3f})"
-        
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(quick_format)
-        except Exception as e:
-            messagebox.showwarning("提示", f"复制失败：\n{e}")
-            self.log(f"复制失败：{e}")
-            return
-        
-        # 计算中心点和区域大小
-        cx = (x1 + x2) / 2
-        cy = (y1 + y2) / 2
-        width_pct = x2 - x1
-        height_pct = y2 - y1
-        
-        self.log(f"一键复制：{quick_format}")
-        messagebox.showinfo(
-            "一键复制成功",
-            f"已复制到剪贴板：\n{quick_format}\n\n中心点：({cx:.3f}, {cy:.3f})\n区域：{width_pct:.1%} x {height_pct:.1%}"
-        )
+    # copy_current_coords and quick_copy_coordinates inherited from LiveDebuggerMixin
 
     def copy_yaml_format(self) -> None:
         """
@@ -2664,140 +2315,10 @@ offset_from_anchor: [{offset_x}, {offset_y}]  # 像素偏移量 (从锚点A到�
             self.log(f"偏移计算失败：{e}")
             messagebox.showerror("计算失败", f"偏移计算失败：\n{e}")
 
-    def on_canvas_press(self, event) -> None:
-        if self.screenshot_pil is None:
-            return
-        if not self._is_point_on_image(event.x, event.y):
-            return
-        self.rect_start_canvas = (int(event.x), int(event.y))
-        if self.rect_id is not None:
-            try:
-                self.canvas.delete(self.rect_id)
-            except Exception:
-                pass
-            self.rect_id = None
-        if self.center_id is not None:
-            try:
-                self.canvas.delete(self.center_id)
-            except Exception:
-                pass
-            self.center_id = None
-
-    def on_canvas_drag(self, event) -> None:
-        if self.screenshot_pil is None or self.rect_start_canvas is None:
-            return
-        x0, y0 = self.rect_start_canvas
-        x1, y1 = int(event.x), int(event.y)
-        if self.rect_id is not None:
-            try:
-                self.canvas.delete(self.rect_id)
-            except Exception:
-                pass
-        self.rect_id = self.canvas.create_rectangle(
-            x0,
-            y0,
-            x1,
-            y1,
-            outline="#00e5ff",
-            width=2,
-            tags="roi",
-        )
-
-    def on_canvas_release(self, event) -> None:
-        if self.screenshot_pil is None or self.rect_start_canvas is None:
-            return
-        x0, y0 = self.rect_start_canvas
-        x1, y1 = int(event.x), int(event.y)
-        self.rect_start_canvas = None
-
-        if not self._is_point_on_image(x0, y0) or not self._is_point_on_image(x1, y1):
-            return
-
-        x0_px, y0_px = self._canvas_to_phone_px(x0, y0)
-        x1_px, y1_px = self._canvas_to_phone_px(x1, y1)
-
-        x0_pct, y0_pct = self._phone_px_to_pct(x0_px, y0_px)
-        x1_pct, y1_pct = self._phone_px_to_pct(x1_px, y1_px)
-
-        roi = RoiPct(x1=x0_pct, y1=y0_pct, x2=x1_pct, y2=y1_pct).normalized().clipped()
-        self.x1_var.set(f"{roi.x1:.3f}")
-        self.y1_var.set(f"{roi.y1:.3f}")
-        self.x2_var.set(f"{roi.x2:.3f}")
-        self.y2_var.set(f"{roi.y2:.3f}")
-        self._draw_roi(roi)
-        
-        # 功能4：任意区域坐标拾取 - 立即输出坐标信息
-        x1_px_final = int(roi.x1 * self.phone_width)
-        y1_px_final = int(roi.y1 * self.phone_height)
-        x2_px_final = int(roi.x2 * self.phone_width)
-        y2_px_final = int(roi.y2 * self.phone_height)
-        
-        coord_log = f"""✅ 区域坐标拾取完成
-
-百分比坐标: [{roi.x1:.3f}, {roi.y1:.3f}, {roi.x2:.3f}, {roi.y2:.3f}]
-像素坐标: [{x1_px_final}, {y1_px_final}, {x2_px_final}, {y2_px_final}]
-
-YAML search_region 格式:
-search_region:
-  x1: {roi.x1:.3f}
-  y1: {roi.y1:.3f}
-  x2: {roi.x2:.3f}
-  y2: {roi.y2:.3f}"""
-        
-        self.log(coord_log)
-        
-        # 如果处于偏移计算模式，保存为目标区域B
-        if self.offset_calculator_mode and self.anchor_center is not None:
-            self.target_roi = roi
-            self._calculate_offset()
-        
-        self.log(f"已通过拖动选择区域，并同步到输入框：({roi.x1:.3f}, {roi.y1:.3f}) 到 ({roi.x2:.3f}, {roi.y2:.3f})")
-
-    def _is_point_on_image(self, cx: int, cy: int) -> bool:
-        return (
-            self.canvas_offset_x <= cx <= self.canvas_offset_x + self.display_width
-            and self.canvas_offset_y <= cy <= self.canvas_offset_y + self.display_height
-        )
-
-    def _canvas_to_phone_px(self, cx: int, cy: int) -> Tuple[int, int]:
-        x = int((cx - self.canvas_offset_x) / max(1e-6, self.canvas_scale))
-        y = int((cy - self.canvas_offset_y) / max(1e-6, self.canvas_scale))
-        x = int(max(0, min(self.phone_width - 1, x)))
-        y = int(max(0, min(self.phone_height - 1, y)))
-        return x, y
-
-    def _phone_px_to_canvas(self, x: int, y: int) -> Tuple[int, int]:
-        cx = int(self.canvas_offset_x + x * self.canvas_scale)
-        cy = int(self.canvas_offset_y + y * self.canvas_scale)
-        return cx, cy
-
-    def _phone_px_to_pct(self, x: int, y: int) -> Tuple[float, float]:
-        if self.phone_width <= 0 or self.phone_height <= 0:
-            return 0.0, 0.0
-        return float(x / self.phone_width), float(y / self.phone_height)
-
-    def _pct_to_phone_px(self, x: float, y: float) -> Tuple[int, int]:
-        x_px = int(round(x * self.phone_width))
-        y_px = int(round(y * self.phone_height))
-        x_px = int(max(0, min(self.phone_width - 1, x_px)))
-        y_px = int(max(0, min(self.phone_height - 1, y_px)))
-        return x_px, y_px
-
-    def test_click_center(self) -> None:
-        if not self.require_device():
-            return
-        roi = self._get_entries_roi()
-        if roi is None:
-            messagebox.showwarning("提示", "坐标输入无效")
-            return
-        cx, cy = roi.center()
-        x_px, y_px = self._pct_to_phone_px(cx, cy)
-        try:
-            self.device.click(x_px, y_px)
-            self.log(f"已点击中心点：({cx:.3f}, {cy:.3f}) -> ({x_px}, {y_px})")
-        except AdbError as e:
-            messagebox.showerror("点击失败", f"点击失败：\n{e}")
-            self.log(f"点击失败：{e}")
+    # Canvas event handlers (on_canvas_press, on_canvas_drag, on_canvas_release) 
+    # and coordinate conversion methods (_is_point_on_image, _canvas_to_phone_px, 
+    # _phone_px_to_canvas, _phone_px_to_pct, _pct_to_phone_px, test_click_center)
+    # are inherited from gui.live_debugger_mixin.LiveDebuggerMixin
 
     def test_ocr_roi(self) -> None:
         if not self.require_device():
@@ -5090,7 +4611,9 @@ Step {i}: {action}
                     
                     self._orch_select_node(node_id)
                     # 记录拖拽偏移
-                    node = self.orch_nodes[node_id]
+                    node = self.orch_nodes.get(node_id)
+                    if node is None:
+                        return
                     self.orch_drag_node_id = node_id
                     self.orch_drag_offset = (cx - node.canvas_x, cy - node.canvas_y)
                     return
