@@ -41,6 +41,9 @@ ACTION_CATEGORIES: Dict[str, Dict[str, Dict[str, str]]] = {
     "⚙️ System": {
         "Wait Time": {"icon": "⏱️", "color": "#607D8B", "label": "等待时间"},
     },
+    "🌐 Network": {
+        "HTTP Request": {"icon": "🌐", "color": "#3F51B5", "label": "HTTP请求"},
+    },
 }
 
 # 逻辑节点列表（不执行人类延迟）

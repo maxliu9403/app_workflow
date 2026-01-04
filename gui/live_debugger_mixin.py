@@ -262,3 +262,192 @@ search_region:
         except Exception as e:
             messagebox.showerror("点击失败", f"点击失败：\n{e}")
             self.log(f"点击失败：{e}")
+    def _get_entries_roi(self) -> Optional['RoiPct']:
+        try:
+            x1 = float(self.x1_var.get())
+            y1 = float(self.y1_var.get())
+            x2 = float(self.x2_var.get())
+            y2 = float(self.y2_var.get())
+            return RoiPct(x1, y1, x2, y2).normalized().clipped()
+        except ValueError:
+            return None
+
+    def _draw_roi(self, roi: 'RoiPct') -> None:
+        if self.phone_width <= 0 or self.phone_height <= 0:
+            return
+
+        x1_px = int(roi.x1 * self.phone_width)
+        y1_px = int(roi.y1 * self.phone_height)
+        x2_px = int(roi.x2 * self.phone_width)
+        y2_px = int(roi.y2 * self.phone_height)
+
+        cx1, cy1 = self._phone_px_to_canvas(x1_px, y1_px)
+        cx2, cy2 = self._phone_px_to_canvas(x2_px, y2_px)
+
+        self.canvas.delete("roi")
+        self.canvas.create_rectangle(
+            cx1, cy1, cx2, cy2,
+            outline="#00e5ff",
+            width=2,
+            tags="roi",
+            dash=(5, 2)
+        )
+
+    def test_ocr_roi(self) -> None:
+        """测试区域 OCR (Text Detection)"""
+        if not self.require_device():
+            return
+            
+        roi = self._get_entries_roi()
+        if not roi:
+            messagebox.showwarning("提示", "坐标无效")
+            return
+            
+        try:
+            from core.vision_service import VisionService
+            # Capture *fresh* screenshot for OCR
+            temp_path = Path("tmp_ocr_test.png")
+            self.device.screenshot(str(temp_path))
+            
+            # Crop image
+            img = cv2.imread(str(temp_path))
+            h, w = img.shape[:2]
+            
+            x1 = int(roi.x1 * w)
+            y1 = int(roi.y1 * h)
+            x2 = int(roi.x2 * w)
+            y2 = int(roi.y2 * h)
+            
+            # Safety clipping
+            x1, x2 = max(0, x1), min(w, x2)
+            y1, y2 = max(0, y1), min(h, y2)
+            
+            if x2 <= x1 or y2 <= y1:
+                messagebox.showerror("错误", "区域无效 (宽度或高度为0)")
+                return
+                
+            crop = img[y1:y2, x1:x2]
+            
+            # Run OCR
+            # Fetch parameters (V8.0)
+            threshold = 127
+            if hasattr(self, 'ocr_threshold_var'):
+                threshold = self.ocr_threshold_var.get()
+            
+            preprocess = "Default"
+            if hasattr(self, 'ocr_preproc_var'):
+                preprocess = self.ocr_preproc_var.get()
+                
+            engine = "PaddleOCR"
+            if hasattr(self, 'ocr_engine_var'):
+                engine = self.ocr_engine_var.get()
+
+            # Ensure VisionService instance
+            vs = VisionService()
+            results = vs.run_ocr(
+                crop, 
+                threshold=threshold, 
+                preprocess=preprocess, 
+                engine=engine
+            ) 
+             
+            self.ocr_detections = [] 
+            for item in results:
+                txt = item.get("text", "")
+                conf = item.get("confidence", 0)
+                box = item.get("box", []) # Adjusted box relative to crop? No, need mapping
+                
+                # run_ocr returns boxes relative to input image (crop)
+                # We need to map them back to full image
+                mapped_box = []
+                for px, py in box:
+                    mapped_box.append((x1 + px, y1 + py))
+                self.ocr_detections.append((txt, conf, mapped_box))
+            
+            self.log(f"[OCR] 在区域内找到 {len(self.ocr_detections)} 个文本元素")
+            self.redraw_screenshot() # Will call _draw_ocr_detections
+            
+        except Exception as e:
+            self.log(f"[OCR] 失败: {e}")
+            messagebox.showerror("OCR Error", str(e))
+
+    def _draw_ocr_detections(self):
+        self.canvas.delete("ocr_box")
+        if not hasattr(self, 'ocr_detections'):
+            return
+            
+        for txt, conf, box in self.ocr_detections:
+            # Draw box on canvas
+            # box is list of (x,y) in phone px
+            pts = []
+            for px, py in box:
+                cx, cy = self._phone_px_to_canvas(px, py)
+                pts.extend([cx, cy])
+            
+            self.canvas.create_polygon(
+                pts,
+                outline="#00ff00",
+                fill="",
+                width=1,
+                tags="ocr_box"
+            )
+            # Draw text
+            cx, cy = self._phone_px_to_canvas(box[0][0], box[0][1])
+            self.canvas.create_text(
+                cx, cy - 10,
+                text=f"{txt} ({conf:.2f})",
+                fill="#00ff00",
+                anchor="sw",
+                font=("Arial", 10),
+                tags="ocr_box"
+            )
+
+    def extract_roi_text_copy(self) -> None:
+        self._extract_roi_text(action="copy")
+
+    def _extract_roi_text(self, action="copy") -> None:
+        if not self.require_device():
+            return
+        roi = self._get_entries_roi()
+        if not roi:
+            return
+            
+        try:
+            temp_path = Path("tmp_ocr_extract.png")
+            self.device.screenshot(str(temp_path))
+            img = cv2.imread(str(temp_path))
+            h, w = img.shape[:2]
+            x1, y1 = int(roi.x1 * w), int(roi.y1 * h)
+            x2, y2 = int(roi.x2 * w), int(roi.y2 * h)
+            crop = img[y1:y2, x1:x2]
+            
+            from core.vision_service import VisionService
+            txt = VisionService.ocr_text_only(crop)
+            
+            if action == "copy":
+                self.root.clipboard_clear()
+                self.root.clipboard_append(txt)
+                messagebox.showinfo("提取成功", f"文本已复制:\n\n{txt}")
+            
+            self.log(f"[OCR提取] {txt}")
+            
+        except Exception as e:
+            self.log(f"[OCR提取] 失败: {e}")
+
+    def _draw_template_match_box(self):
+        # Stub for now
+        pass
+        
+    def _draw_offset_calculator(self):
+        # Stub for now
+        pass
+    
+    def start_offset_calculator(self):
+        self.offset_calculator_mode = True
+        self.log("启动偏移计算器: 请先点击参照点，再点击目标点")
+        
+    def clear_offset_calculator(self):
+        self.offset_calculator_mode = False
+        self.anchor_center = None
+        self.target_roi = None
+        self.log("偏移计算器重置")

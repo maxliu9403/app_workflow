@@ -157,12 +157,30 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
         self.orch_prop_y2_var = ctk.StringVar(value="0.0")
 
         self.gen_y2_var = ctk.StringVar(value="0")
+        
+        # V9.0: Global Variable Library
+        self.global_vars = {} # {Key: Value}
+        self._load_global_vars()
 
         self.gen_queue_var = ctk.StringVar()
+        
+        # V8.3: HTTP Request Node Variables
+        self.http_url_var = ctk.StringVar()
+        # Port removed
+        self.http_method_var = ctk.StringVar(value="GET")
+        self.http_logic_var = ctk.StringVar(value="res.status_code == 200")
+        self.http_timeout_var = ctk.StringVar(value="10")
+        self.http_body_content = "" # Mirror of text widget
         
         # V7.0: 绑定变量追踪，实现 Inspector -> Node 的实时更新
         self._is_updating_ui = False
         
+        self.http_url_var.trace_add("write", self._on_http_inspector_change)
+        # Port removed
+        self.http_method_var.trace_add("write", self._on_http_inspector_change)
+        self.http_logic_var.trace_add("write", self._on_http_inspector_change)
+        self.http_timeout_var.trace_add("write", self._on_http_inspector_change)
+
         self.gen_step_var.trace_add("write", self._on_inspector_change)
         self.gen_action_var.trace_add("write", self._on_inspector_change)
         self.gen_operator_var.trace_add("write", self._on_inspector_change)
@@ -181,10 +199,220 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
         self.refresh_device_list()
         self.load_yaml()
         
+    def _build_http_inspector(self, parent):
+        """V8.3: Build specialized HTTP Request Inspector"""
+        self.http_prop_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        
+        # URL & Method
+        row1 = ctk.CTkFrame(self.http_prop_frame, fg_color="transparent")
+        row1.pack(fill="x", pady=2)
+        ctk.CTkLabel(row1, text="Method:", width=50).pack(side="left")
+        ctk.CTkComboBox(row1, variable=self.http_method_var, values=["GET", "POST", "PUT", "DELETE"], width=80).pack(side="left", padx=5)
+        ctk.CTkLabel(row1, text="URL:", width=40).pack(side="left")
+        ctk.CTkEntry(row1, textvariable=self.http_url_var, placeholder_text="http://api.com").pack(side="left", fill="x", expand=True)
+
+        # Port & Timeout
+        row2 = ctk.CTkFrame(self.http_prop_frame, fg_color="transparent")
+        row2.pack(fill="x", pady=2)
+        # Port removed
+        ctk.CTkLabel(row2, text="Timeout:", width=60).pack(side="left")
+        ctk.CTkEntry(row2, textvariable=self.http_timeout_var, width=60).pack(side="left")
+        
+        # Body (Key-Value Editor)
+        ctk.CTkLabel(self.http_prop_frame, text="Request Body (Key-Value):", anchor="w").pack(fill="x", pady=(5,0))
+        
+        # Header (Key | Value | Del)
+        header_frame = ctk.CTkFrame(self.http_prop_frame, fg_color="transparent", height=24)
+        header_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(header_frame, text="Key", width=80, anchor="w", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=5)
+        # Value expands
+        ctk.CTkLabel(header_frame, text="Value (supports ${v})", anchor="w", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=5, fill="x", expand=True)
+        # Placeholder for delete btn alignment
+        ctk.CTkLabel(header_frame, text="", width=24).pack(side="right", padx=2)
+
+        # Scrollable container for rows
+        self.http_kv_frame = ctk.CTkScrollableFrame(self.http_prop_frame, height=120, fg_color="transparent")
+        self.http_kv_frame.pack(fill="x", pady=2)
+        
+        # Add Button
+        ctk.CTkButton(self.http_prop_frame, text="+ Add Field", height=24, fg_color="#555", command=self._add_http_kv_row).pack(fill="x", pady=2)
+        
+        self.http_kv_rows = [] # List of (key_entry, value_entry, row_frame)
+        
+        # Logic
+        ctk.CTkLabel(self.http_prop_frame, text="Success Logic (e.g. res.status = 200):", anchor="w").pack(fill="x", pady=(5,0))
+        ctk.CTkEntry(self.http_prop_frame, textvariable=self.http_logic_var).pack(fill="x", pady=2)
+
+    def _add_http_kv_row(self, key="", val=""):
+        row = ctk.CTkFrame(self.http_kv_frame, fg_color="transparent")
+        row.pack(fill="x", pady=1)
+        
+        k_ent = ctk.CTkEntry(row, width=80, placeholder_text="key")
+        k_ent.pack(side="left", padx=2)
+        if key: k_ent.insert(0, key)
+        k_ent.bind("<KeyRelease>", self._sync_kv_to_json)
+        
+        v_ent = ctk.CTkEntry(row, placeholder_text="val")
+        v_ent.pack(side="left", fill="x", expand=True, padx=2)
+        if val: v_ent.insert(0, val)
+        v_ent.bind("<KeyRelease>", self._sync_kv_to_json)
+
+
+        
+        del_btn = ctk.CTkButton(row, text="×", width=24, height=24, fg_color="#C0392B", command=lambda r=row: self._remove_http_kv_row(r))
+        del_btn.pack(side="right", padx=2)
+        
+        self.http_kv_rows.append((k_ent, v_ent, row))
+        self._sync_kv_to_json()
+
+    def _show_global_vars_dialog(self):
+        """V9.0: Show Global Variable Library Dialog"""
+        if hasattr(self, 'global_vars_window') and self.global_vars_window is not None and self.global_vars_window.winfo_exists():
+            self.global_vars_window.focus()
+            return
+
+        self.global_vars_window = ctk.CTkToplevel(self.root)
+        self.global_vars_window.title("Global Variable Library")
+        self.global_vars_window.geometry("500x400")
+        self.global_vars_window.attributes("-topmost", True)
+        
+        # Header
+        ctk.CTkLabel(self.global_vars_window, text="Global Variables", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(self.global_vars_window, text="Accessible in node params via ${Key}", text_color="gray").pack()
+
+        # Canvas for entries
+        self.gv_scroll = ctk.CTkScrollableFrame(self.global_vars_window, width=450, height=250)
+        self.gv_scroll.pack(padx=10, pady=10, fill="both", expand=True)
+
+        self.gv_entries = [] # List of (key_entry, val_entry, frame)
+
+        # Populate existing
+        for k, v in self.global_vars.items():
+            self._add_gv_row(k, v)
+
+        # Control Bar
+        ctrl_frame = ctk.CTkFrame(self.global_vars_window, fg_color="transparent")
+        ctrl_frame.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkButton(ctrl_frame, text="+ Add Variable", command=lambda: self._add_gv_row()).pack(side="left", padx=5)
+        ctk.CTkButton(ctrl_frame, text="Save & Close", fg_color="green", command=self._save_global_vars).pack(side="right", padx=5)
+
+    def _add_gv_row(self, k="", v=""):
+        row = ctk.CTkFrame(self.gv_scroll, fg_color="transparent")
+        row.pack(fill="x", pady=2)
+        
+        k_ent = ctk.CTkEntry(row, width=120, placeholder_text="Key")
+        k_ent.pack(side="left", padx=2)
+        if k: k_ent.insert(0, k)
+        # Lock DeviceID
+        if k == "DeviceID": k_ent.configure(state="disabled")
+
+        v_ent = ctk.CTkEntry(row, placeholder_text="Value")
+        v_ent.pack(side="left", fill="x", expand=True, padx=2)
+        if v: v_ent.insert(0, str(v))
+        
+        if k != "DeviceID":
+            del_btn = ctk.CTkButton(row, text="×", width=24, height=24, fg_color="#C0392B", command=lambda r=row: self._remove_gv_row(r))
+            del_btn.pack(side="right", padx=2)
+        else:
+             ctk.CTkLabel(row, text="🔒", width=24).pack(side="right", padx=2)
+
+        self.gv_entries.append((k_ent, v_ent, row))
+
+    def _remove_gv_row(self, row_obj):
+        self.gv_entries = [r for r in self.gv_entries if r[2] != row_obj]
+        row_obj.destroy()
+
+    def _save_global_vars(self):
+        new_vars = {}
+        for k_e, v_e, _ in self.gv_entries:
+            key = k_e.get().strip()
+            val = v_e.get().strip()
+            if key:
+                new_vars[key] = val
+        
+        self.global_vars = new_vars
+        self.log(f"[Global] Variables updated: {len(self.global_vars)} keys")
+        
+        # Persistence
+        try:
+            with open("global_vars.json", "w", encoding="utf-8") as f:
+                json.dump(self.global_vars, f, indent=2)
+            self.log("[Global] Variables saved to global_vars.json")
+        except Exception as e:
+            self.log(f"[Global] Save failed: {e}")
+
+        if self.global_vars_window:
+            self.global_vars_window.destroy()
+
+    def _load_global_vars(self):
+        try:
+            if os.path.exists("global_vars.json"):
+                with open("global_vars.json", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        self.global_vars.update(data)
+                        self.log(f"[Global] Loaded {len(data)} variables")
+        except Exception as e:
+            self.log(f"[Global] Load failed: {e}")
+
+    def _remove_http_kv_row(self, row_widget):
+        # Remove from list
+        self.http_kv_rows = [r for r in self.http_kv_rows if r[2] != row_widget]
+        row_widget.destroy()
+        self._sync_kv_to_json()
+
+    def _sync_kv_to_json(self, event=None):
+        """Serialize KV rows to JSON string and update params Params"""
+        data = {}
+        for k_ent, v_ent, _ in self.http_kv_rows:
+            k = k_ent.get().strip()
+            v = v_ent.get() # Don't strip value, spaces might be needed? Usually strip param values.
+            if k:
+                data[k] = v
+        
+        try:
+            import json
+            self.http_body_content = json.dumps(data)
+            self._on_http_inspector_change()
+        except:
+             pass
+
+    def _on_http_inspector_change(self, *args):
+        """Sync HTTP UI -> Node Params JSON"""
+        if self._is_updating_ui or not self.orch_selected_node:
+            return
+            
+        # Only if current action is HTTP Request
+        if self.gen_action_var.get() != "HTTP Request":
+            return
+
+        import json
+        node = self.orch_nodes.get(self.orch_selected_node)
+        if not node: return
+        
+        params = {
+            "url": self.http_url_var.get(),
+            # Port removed
+            "method": self.http_method_var.get(),
+            "body": self.http_body_content,
+            "logic": self.http_logic_var.get(),
+            "timeout": self.http_timeout_var.get()
+        }
+        
+        try:
+            node.params = json.dumps(params)
+             # Update visual label if needed (optional)
+            self._orch_draw_node(node)
+        except: pass
+        
 
         
         # V3.3: 启动时自动恢复
         self.root.after(500, self._gen_autoload)
+
+        # V8.0: Global Shortcuts
+        self.root.bind("<F8>", self._orch_toggle_pause)
 
     def _load_custom_nodes(self):
         """V7.9: Load Custom Extensions"""
@@ -216,8 +444,20 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
             "Input Text", "Input Text (Base64)", "Input Text (Native)", 
             "Key Event", "Click Check Keyboard", "ADB Key",
             "Wait", "Sleep", 
-            "Loop (Count)", "BREAK", "END LOOP", "ELSE", "END IF"
+            "Loop (Count)", "BREAK", "END LOOP", "ELSE", "END IF",
+            "HTTP Request"
         }
+        
+        # V8.3: HTTP Inspector Toggle
+        if hasattr(self, 'http_prop_frame'):
+            if action_type == "HTTP Request":
+                self.http_prop_frame.grid()
+                if hasattr(self, 'gen_param_frame'):
+                    self.gen_param_frame.grid_remove()
+            else:
+                self.http_prop_frame.grid_remove()
+                if hasattr(self, 'gen_param_frame'):
+                    self.gen_param_frame.grid()
         
         # 1. 控制坐标区域显示
         if hasattr(self, 'gen_coord_frame'):
@@ -628,6 +868,32 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
             command=self.clear_offset_calculator,
         )
         self.btn_clear_offset.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        # V8.0: OCR Settings UI
+        ocr_settings_frame = ctk.CTkFrame(control_panel)
+        ocr_settings_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
+        
+        ctk.CTkLabel(ocr_settings_frame, text="⚙️ OCR 参数设置", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(5, 5))
+        
+        # Threshold
+        ctk.CTkLabel(ocr_settings_frame, text="二值化阈值:").grid(row=1, column=0, sticky="w", padx=10)
+        self.ocr_threshold_var = ctk.IntVar(value=127)
+        self.ocr_threshold_slider = ctk.CTkSlider(ocr_settings_frame, from_=0, to=255, variable=self.ocr_threshold_var, number_of_steps=255)
+        self.ocr_threshold_slider.grid(row=1, column=1, sticky="ew", padx=10)
+        
+        # Preprocessing
+        ctk.CTkLabel(ocr_settings_frame, text="预处理:").grid(row=2, column=0, sticky="w", padx=10)
+        self.ocr_preproc_var = ctk.StringVar(value="Default")
+        self.ocr_preproc_combo = ctk.CTkComboBox(ocr_settings_frame, variable=self.ocr_preproc_var, values=["Default", "Grayscale", "Binary", "Otsu"])
+        self.ocr_preproc_combo.grid(row=2, column=1, sticky="ew", padx=10, pady=5)
+
+        # Engine
+        ctk.CTkLabel(ocr_settings_frame, text="OCR 引擎:").grid(row=3, column=0, sticky="w", padx=10)
+        self.ocr_engine_var = ctk.StringVar(value="PaddleOCR")
+        self.ocr_engine_combo = ctk.CTkComboBox(ocr_settings_frame, variable=self.ocr_engine_var, values=["PaddleOCR", "Tesseract"])
+        self.ocr_engine_combo.grid(row=3, column=1, sticky="ew", padx=10, pady=5)
+        
+        ocr_settings_frame.grid_columnconfigure(1, weight=1)
+
         text_tool_frame.grid_columnconfigure((0, 1), weight=1)
 
         ctk.CTkLabel(
@@ -878,6 +1144,7 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
         
         ctk.CTkLabel(header_frame, text="🧩 节点", font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=5)
         
+        ctk.CTkButton(header_frame, text="🌐 变量", width=60, height=24, fg_color="#E67E22", hover_color="#D35400", font=ctk.CTkFont(size=12, weight="bold"), command=self._show_global_vars_dialog).pack(side="right", padx=5)
         ctk.CTkButton(header_frame, text="✨ 扩展", width=60, height=24, fg_color="#6C5CE7", hover_color="#5849BE", font=ctk.CTkFont(size=12, weight="bold"), command=self._show_extension_import).pack(side="right", padx=5)
 
         # 生成节点按钮
@@ -967,6 +1234,11 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
             text="📝 参数",
             font=ctk.CTkFont(size=14, weight="bold"),
         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=2)
+
+        # V8.3: specialized HTTP Inspector
+        self._build_http_inspector(self.left_panel)
+        self.http_prop_frame.grid(row=3, column=0, sticky="ew", padx=2, pady=2)
+        self.http_prop_frame.grid_remove() # Default hidden
 
         # V7.6: 快捷参数 (Top)
         self.gen_shortcut_label = ctk.CTkLabel(self.gen_param_frame, text="推荐:", font=ctk.CTkFont(size=11))
@@ -1238,24 +1510,41 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
             command=self._orch_auto_connect
         ).grid(row=0, column=1, sticky="e", padx=2)
 
-        # 节点列表 Listbox
+        # 节点列表 Listbox (Split to share space with Log)
         list_container = ctk.CTkFrame(node_list_frame)
         list_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        list_container.grid_rowconfigure(0, weight=1)
+        list_container.grid_rowconfigure(0, weight=2) # List box gets 66%
+        list_container.grid_rowconfigure(1, weight=1) # Log box gets 33%
         list_container.grid_columnconfigure(0, weight=1)
 
+        # 1. 节点列表 (Top 66%)
+        listbox_frame = ctk.CTkFrame(list_container, fg_color="transparent")
+        listbox_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 5))
+        listbox_frame.grid_rowconfigure(0, weight=1)
+        listbox_frame.grid_columnconfigure(0, weight=1)
+
         self.gen_queue_listbox = tk.Listbox(
-            list_container, bg="#2a2a2a", fg="#ffffff",
+            listbox_frame, bg="#2a2a2a", fg="#ffffff",
             selectbackground="#3498db", font=("Consolas", 10), height=10
         )
         self.gen_queue_listbox.grid(row=0, column=0, sticky="nsew")
         self.gen_queue_listbox.bind("<<ListboxSelect>>", self._on_node_list_select)
         self.gen_queue_listbox.bind("<Double-1>", self._gen_on_queue_double_click)
         
-        # 滚动条
-        list_scrollbar = tk.Scrollbar(list_container, orient="vertical", command=self.gen_queue_listbox.yview)
+        list_scrollbar = tk.Scrollbar(listbox_frame, orient="vertical", command=self.gen_queue_listbox.yview)
         list_scrollbar.grid(row=0, column=1, sticky="ns")
         self.gen_queue_listbox.configure(yscrollcommand=list_scrollbar.set)
+
+        # 2. 运行日志 (Bottom 33%)
+        log_frame = ctk.CTkFrame(list_container, fg_color="transparent")
+        log_frame.grid(row=1, column=0, sticky="nsew", pady=(5, 0))
+        log_frame.grid_rowconfigure(1, weight=1)
+        log_frame.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(log_frame, text="📜 运行日志", font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=0, sticky="w")
+        
+        self.orch_log_text = ctk.CTkTextbox(log_frame, font=("Consolas", 9), activate_scrollbars=True)
+        self.orch_log_text.grid(row=1, column=0, sticky="nsew")
 
         # V7.3: 坐标显示区 (移动到右侧，位于节点列表下方)
         self.gen_coord_frame = ctk.CTkFrame(self.control_panel)
@@ -1307,131 +1596,7 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
         )
         self.btn_clear_gen_coords.grid(row=0, column=1, sticky="ew", padx=(5, 0), pady=6)
 
-    # V7.11: Canvas Pop-out to Separate Window
-    def _toggle_canvas_popout(self):
-        """Pop out the canvas to a separate window, or dock it back"""
-        if hasattr(self, '_canvas_window') and self._canvas_window and self._canvas_window.winfo_exists():
-            # Already popped out - dock it back
-            self._dock_canvas()
-        else:
-            # Pop out to new window
-            self._popout_canvas()
-    
-    def _popout_canvas(self):
-        """Move canvas to a separate floating window"""
-        # 1. Create new Toplevel window
-        self._canvas_window = ctk.CTkToplevel(self.root)
-        self._canvas_window.title("🎨 工作流画布 - 独立窗口")
-        self._canvas_window.geometry("1200x800")
-        self._canvas_window.configure(fg_color="#1a1a1a")
-        
-        # Handle window close
-        self._canvas_window.protocol("WM_DELETE_WINDOW", self._dock_canvas)
-        
-        # 2. Create placeholder in original location
-        self._canvas_placeholder = ctk.CTkFrame(self.center_panel, fg_color="#2a2a2a")
-        self._canvas_placeholder.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
-        
-        placeholder_label = ctk.CTkLabel(
-            self._canvas_placeholder, 
-            text="📺 画布已在独立窗口中打开\n\n点击「收回画布」按钮或关闭独立窗口\n可将画布嵌入回主界面",
-            font=("Arial", 14),
-            text_color="#888"
-        )
-        placeholder_label.pack(expand=True)
-        
-        dock_btn = ctk.CTkButton(
-            self._canvas_placeholder, text="⬅ 收回画布", width=120, height=36,
-            fg_color="#27ae60", command=self._dock_canvas
-        )
-        dock_btn.pack(pady=20)
-        
-        # 3. Hide original container and move canvas to new window
-        self.canvas_container.grid_remove()
-        
-        # 4. Create new container in popup window
-        self._popup_container = ctk.CTkFrame(self._canvas_window, fg_color="#1e1e1e")
-        self._popup_container.pack(fill="both", expand=True, padx=10, pady=10)
-        self._popup_container.grid_rowconfigure(0, weight=1)
-        self._popup_container.grid_columnconfigure(0, weight=1)
-        
-        # 5. Reparent canvas to popup - MUST use grid_forget first to release from old manager
-        self.orch_canvas.grid_forget()
-        self.orch_canvas.configure(bg="#1e1e1e")
-        
-        # Recreate canvas in popup (simpler than reparenting due to Tkinter limitations)
-        self._original_canvas = self.orch_canvas  # Keep reference
-        self._popup_canvas = tk.Canvas(self._popup_container, bg="#1e1e1e", highlightthickness=0)
-        self._popup_canvas.pack(fill="both", expand=True)
-        
-        # Copy canvas bindings
-        self._popup_canvas.bind("<Button-1>", self._orch_on_canvas_click)
-        self._popup_canvas.bind("<B1-Motion>", self._orch_on_canvas_drag)
-        self._popup_canvas.bind("<ButtonRelease-1>", self._orch_on_canvas_release)
-        self._popup_canvas.bind("<Double-Button-1>", self._orch_on_canvas_double_click)
-        self._popup_canvas.bind("<ButtonPress-2>", self._orch_on_canvas_pan_start)
-        self._popup_canvas.bind("<B2-Motion>", self._orch_on_canvas_pan_drag)
-        self._popup_canvas.bind("<Control-ButtonPress-1>", self._orch_on_canvas_pan_start)
-        self._popup_canvas.bind("<Control-B1-Motion>", self._orch_on_canvas_pan_drag)
-        
-        # V7.12: Add missing bindings for popup canvas
-        self._popup_canvas.bind("<Button-3>", self._orch_on_canvas_right_click)
-        self._popup_canvas.bind("<Delete>", self._orch_delete_selected_node)
-        self._popup_canvas.bind("<BackSpace>", self._orch_delete_selected_node)
-        
-        # Swap canvas reference
-        self.orch_canvas = self._popup_canvas
-        
-        # 6. Add toolbar in popup window
-        popup_toolbar = ctk.CTkFrame(self._canvas_window, height=50, fg_color="#222")
-        popup_toolbar.pack(fill="x", side="bottom", padx=10, pady=(0, 10))
-        
-        ctk.CTkButton(popup_toolbar, text="▶️ 运行全部", fg_color="#27ae60", width=100,
-                      command=self._orch_run_all).pack(side="left", padx=5, pady=5)
-        ctk.CTkButton(popup_toolbar, text="💾 保存", fg_color="#3498db", width=80,
-                      command=self._orch_export_json).pack(side="left", padx=5, pady=5)
-        ctk.CTkButton(popup_toolbar, text="📂 加载", fg_color="#555", width=80,
-                      command=self._orch_import_json).pack(side="left", padx=5, pady=5)
-        
-        ctk.CTkButton(popup_toolbar, text="⬅ 收回画布", fg_color="#e74c3c", width=100,
-                      command=self._dock_canvas).pack(side="right", padx=5, pady=5)
-        
-        # 7. Update button in main window
-        self.expand_btn.configure(text="⬅ 收回", fg_color="#e74c3c")
-        
-        # 8. Redraw canvas grid
-        self._orch_draw_grid()
-    
-    def _dock_canvas(self):
-        """Move canvas back to main window"""
-        if not hasattr(self, '_canvas_window') or not self._canvas_window:
-            return
-            
-        # 1. Remove placeholder
-        if hasattr(self, '_canvas_placeholder') and self._canvas_placeholder:
-            self._canvas_placeholder.destroy()
-            self._canvas_placeholder = None
-        
-        # 2. Restore original canvas reference
-        if hasattr(self, '_original_canvas') and self._original_canvas:
-            self.orch_canvas = self._original_canvas
-            self.orch_canvas.grid(row=0, column=0, sticky="nsew")
-        
-        # 3. Show original container
-        self.canvas_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
-        
-        # 4. Destroy popup window (this also destroys popup canvas)
-        if self._canvas_window and self._canvas_window.winfo_exists():
-            self._canvas_window.destroy()
-        self._canvas_window = None
-        self._popup_canvas = None
-        self._original_canvas = None
-        
-        # 5. Update button
-        self.expand_btn.configure(text="⬜ 独立窗口", fg_color="#555")
-        
-        # 6. Redraw canvas grid
-        self._orch_draw_grid()
+
 
     def _make_labeled_entry(
         self,
@@ -4123,1713 +4288,9 @@ Step {i}: {action}
         # 绘制初始网格
         self.orch_canvas.bind("<Configure>", lambda e: self._orch_draw_grid())
 
-    def _darken_color(self, hex_color: str, factor: float = 0.8) -> str:
-        """将颜色变暗"""
-        hex_color = hex_color.lstrip("#")
-        r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
-        r, g, b = int(r * factor), int(g * factor), int(b * factor)
-        return f"#{r:02x}{g:02x}{b:02x}"
 
-    def _orch_draw_grid(self) -> None:
-        """绘制画布网格背景"""
-        self.orch_canvas.delete("grid")
-        w = self.orch_canvas.winfo_width()
-        h = self.orch_canvas.winfo_height()
-        grid_size = 30
-        grid_color = "#2a2a2a"
 
-        for x in range(0, w, grid_size):
-            self.orch_canvas.create_line(x, 0, x, h, fill=grid_color, tags="grid")
-        for y in range(0, h, grid_size):
-            self.orch_canvas.create_line(0, y, w, y, fill=grid_color, tags="grid")
 
-        self.orch_canvas.tag_lower("grid")
-
-    def _orch_refresh_listbox(self) -> None:
-        """刷新右侧节点列表"""
-        if not hasattr(self, 'gen_queue_listbox'):
-            return
-            
-        self.gen_queue_listbox.delete(0, tk.END)
-        
-        # 按 Step Name 这里的数字排序 (如果格式为 "Step N")
-        try:
-            nodes = list(self.orch_nodes.values())
-            # 尝试提取 Step 后面的数字排序
-            import re
-            def sort_key(n):
-                match = re.search(r'(\d+)', n.step_name)
-                return int(match.group(1)) if match else 999999
-            nodes.sort(key=sort_key)
-        except:
-            # 失败则按创建顺序 (这里用ID/StepName fallback)
-            nodes.sort(key=lambda n: n.step_name)
-        
-        # Cache the sorted node IDs for listbox selection mapping
-        self._orch_listbox_cache = [n.id for n in nodes]
-        
-        for node in nodes:
-            display = f"{node.step_name}: {node.action_type}"
-            self.gen_queue_listbox.insert(tk.END, display)
-
-    def _orch_scroll_to_node(self, node_id: str) -> None:
-        """Scroll canvas to center the specified node"""
-        node = self.orch_nodes.get(node_id)
-        if not node or not hasattr(self, 'orch_canvas'):
-            return
-            
-        try:
-            # 1. Force update scrollregion to ensure it includes all nodes
-            self.orch_canvas.update_idletasks() # Ensure layout is up to date
-            bbox = self.orch_canvas.bbox("all")
-            if not bbox:
-                return
-            
-            # Update scrollregion
-            self.orch_canvas.configure(scrollregion=bbox)
-            
-            # 2. Get region dimensions
-            min_x, min_y, max_x, max_y = bbox
-            total_w = max_x - min_x
-            total_h = max_y - min_y
-            
-            # Canvas viewport dimensions
-            view_w = self.orch_canvas.winfo_width()
-            view_h = self.orch_canvas.winfo_height()
-            
-            # Node center coordinates (assuming ~160x70 size)
-            node_cx = node.canvas_x + 80
-            node_cy = node.canvas_y + 35
-            
-            # 3. Calculate scroll fraction (xview_moveto/yview_moveto accept 0.0-1.0)
-            # 0.0 means viewport left/top is at min_x/min_y
-            # 1.0 means viewport right/bottom is at max_x/max_y (approximately)
-            # Formula: fraction = (target_edge - min_edge) / total_dimension
-            
-            if total_w > view_w and total_w > 0:
-                # We want node_cx to be at center of viewport
-                # viewport_left = node_cx - view_w / 2
-                target_left = node_cx - (view_w / 2)
-                
-                # Clamp target_left within bounds [min_x, max_x - view_w]
-                if target_left < min_x: target_left = min_x
-                if target_left > max_x - view_w: target_left = max_x - view_w
-                
-                fraction_x = (target_left - min_x) / total_w
-                self.orch_canvas.xview_moveto(fraction_x)
-                
-            if total_h > view_h and total_h > 0:
-                target_top = node_cy - (view_h / 2)
-                
-                # Clamp
-                if target_top < min_y: target_top = min_y
-                if target_top > max_y - view_h: target_top = max_y - view_h
-                
-                fraction_y = (target_top - min_y) / total_h
-                self.orch_canvas.yview_moveto(fraction_y)
-                
-        except Exception as e:
-            print(f"Auto-scroll error: {e}")
-
-    def _on_node_list_select(self, event) -> None:
-        """Handle selection from the node listbox"""
-        selection = self.gen_queue_listbox.curselection()
-        if not selection:
-            return
-            
-        idx = selection[0]
-        if hasattr(self, '_orch_listbox_cache') and 0 <= idx < len(self._orch_listbox_cache):
-            node_id = self._orch_listbox_cache[idx]
-            self._orch_select_node(node_id)
-            self._orch_scroll_to_node(node_id)
-            # Focus properly on canvas is sometimes desired, but listbox focus is also fine.
-            # self.orch_canvas.focus_set()
-
-    def _orch_add_node_from_palette(self, action_type: str) -> None:
-        """从节点库添加节点到画布中心"""
-        # 计算新节点位置（错开已有节点）
-        base_x = 200 + len(self.orch_nodes) * 30
-        base_y = 100 + (len(self.orch_nodes) % 5) * 80
-
-        node_id = str(uuid.uuid4())[:8]
-        step_name = f"Step {len(self.orch_nodes) + 1}"
-
-        node = WorkflowNode(
-            id=node_id,
-            action_type=action_type,
-            step_name=step_name,
-            canvas_x=base_x,
-            canvas_y=base_y,
-        )
-
-        self.orch_nodes[node_id] = node
-        self._orch_draw_node(node)
-        self._orch_select_node(node_id)
-        self._orch_select_node(node_id)
-        self.log(f"[编排] 添加节点: {step_name} ({action_type})")
-        self._orch_refresh_listbox()
-
-    def _add_node_to_canvas(self, action_type: str) -> None:
-        """V6.0: 从节点库添加节点到画布 (统一接口)"""
-        self._orch_add_node_from_palette(action_type)
-
-    def _orch_draw_node(self, node: WorkflowNode) -> None:
-        """V7.0: 绘制单个节点 (增强视觉效果)"""
-        style = NODE_STYLES.get(node.action_type, {"color": "#666666", "icon": "?", "label": "未知"})
-
-        x, y = node.canvas_x, node.canvas_y
-        w, h = 160, 70
-        r = 8  # 圆角半径
-        is_selected = self.orch_selected_node == node.id
-        is_running = hasattr(self, 'orch_running_node') and self.orch_running_node == node.id
-
-        # 清除旧的绘制
-        if node.id in self.orch_node_canvas_items:
-            for item_id in self.orch_node_canvas_items[node.id]:
-                self.orch_canvas.delete(item_id)
-
-        items = []
-        
-        # V7.12: Running glow effect (pulsing border)
-        if is_running:
-            # Outer glow
-            glow_id = self.orch_canvas.create_rectangle(
-                x - 6, y - 6, x + w + 6, y + h + 6,
-                fill="", outline="#ff0000", width=4,
-                tags=("node", f"node_{node.id}", "running_glow"),
-            )
-            items.append(glow_id)
-            
-            # Second glow layer
-            glow2_id = self.orch_canvas.create_rectangle(
-                x - 3, y - 3, x + w + 3, y + h + 3,
-                fill="", outline="#ff4444", width=2,
-                tags=("node", f"node_{node.id}", "running_glow"),
-            )
-            items.append(glow2_id)
-        
-        # 阴影效果
-        shadow_id = self.orch_canvas.create_rectangle(
-            x + 3, y + 3, x + w + 3, y + h + 3,
-            fill="#0a0a0a", outline="",
-            tags=("node", f"node_{node.id}"),
-        )
-        items.append(shadow_id)
-
-        # 节点背景
-        bg_color = style["color"]
-        if is_running:
-            outline_color = "#ff0000"
-            outline_width = 4
-        elif is_selected:
-            outline_color = "#ffff00"  # Yellow for selection
-            outline_width = 3
-        else:
-            outline_color = "#333333"
-            outline_width = 1
-        
-        rect_id = self.orch_canvas.create_rectangle(
-            x, y, x + w, y + h,
-            fill=bg_color,
-            outline=outline_color,
-            width=outline_width,
-            tags=("node", f"node_{node.id}"),
-        )
-        items.append(rect_id)
-        
-        # 标题栏背景 (深色)
-        header_id = self.orch_canvas.create_rectangle(
-            x + 1, y + 1, x + w - 1, y + 22,
-            fill=self._darken_color(bg_color),
-            outline="",
-            tags=("node", f"node_{node.id}"),
-        )
-        items.append(header_id)
-
-        # 节点图标和标题
-        title_text = f"{style['icon']} {node.step_name}"
-        if len(title_text) > 18:
-            title_text = title_text[:16] + "..."
-
-        title_id = self.orch_canvas.create_text(
-            x + 10, y + 12,
-            text=title_text,
-            fill="white",
-            font=("Arial", 10, "bold"),
-            anchor="w",
-            tags=("node", f"node_{node.id}"),
-        )
-        items.append(title_id)
-
-        # V7.9: Right Icon (Emoji or Image)
-        icon_val = style.get("icon", "?")
-        icon_x = x + w - 25
-        icon_y = y + h // 2 + 5
-        
-        # Check if Image
-        if isinstance(icon_val, str) and icon_val.lower().endswith(('.png', '.jpg')):
-             try:
-                 if Path(icon_val).exists():
-                     # Cache Key
-                     cache_key = f"{icon_val}_32"
-                     if cache_key not in self.orch_node_images:
-                         pil_img = Image.open(icon_val).resize((32, 32))
-                         self.orch_node_images[cache_key] = ImageTk.PhotoImage(pil_img)
-                     
-                     img_obj = self.orch_node_images[cache_key]
-                     img_id = self.orch_canvas.create_image(
-                         icon_x, icon_y, image=img_obj, tags=("node", f"node_{node.id}")
-                     )
-                     items.append(img_id)
-             except Exception:
-                 pass
-        else:
-             # Emoji/Text
-             emoji_id = self.orch_canvas.create_text(
-                  icon_x, icon_y,
-                  text=icon_val,
-                  font=("Segoe UI Emoji", 24),
-                  fill="#555",
-                  tags=("node", f"node_{node.id}")
-             )
-             items.append(emoji_id)
-
-        # 动作类型标签
-        action_id = self.orch_canvas.create_text(
-            x + 10, y + 38,
-            text=style["label"],
-            fill="#dddddd",
-            font=("Arial", 9),
-            anchor="w",
-            tags=("node", f"node_{node.id}"),
-        )
-        items.append(action_id)
-        
-        # 参数预览
-        param_text = str(node.params)[:20] if node.params else ""
-        if param_text:
-            param_id = self.orch_canvas.create_text(
-                x + 10, y + 55,
-                text=param_text,
-                fill="#aaaaaa",
-                font=("Arial", 8),
-                anchor="w",
-                tags=("node", f"node_{node.id}"),
-            )
-            items.append(param_id)
-
-        # 输入连接点（左侧圆点）
-        in_x, in_y = x, y + h // 2
-        in_ring_id = self.orch_canvas.create_oval(
-            in_x - 8, in_y - 8, in_x + 8, in_y + 8,
-            fill="#2a2a2a", outline=bg_color, width=2,
-            tags=("input_port", f"input_{node.id}"),
-        )
-        items.append(in_ring_id)
-        in_dot_id = self.orch_canvas.create_oval(
-            in_x - 4, in_y - 4, in_x + 4, in_y + 4,
-            fill="#ffffff", outline="",
-            tags=("input_port", f"input_{node.id}"),
-        )
-        items.append(in_dot_id)
-
-        # 输出连接点（右侧圆点）
-        out_x, out_y = x + w, y + h // 2
-        out_ring_id = self.orch_canvas.create_oval(
-            out_x - 8, out_y - 8, out_x + 8, out_y + 8,
-            fill="#2a2a2a", outline=bg_color, width=2,
-            tags=("output_port", f"output_{node.id}"),
-        )
-        items.append(out_ring_id)
-        out_dot_id = self.orch_canvas.create_oval(
-            out_x - 4, out_y - 4, out_x + 4, out_y + 4,
-            fill="#ffffff", outline="",
-            tags=("output_port", f"output_{node.id}"),
-        )
-        items.append(out_dot_id)
-
-        self.orch_node_canvas_items[node.id] = items
-
-    def _orch_draw_all_nodes(self) -> None:
-        """绘制所有节点和连接"""
-        self._orch_clear_canvas_items()
-        
-        # 绘制所有连接
-        for from_id, to_id in self.orch_connections:
-            self._orch_draw_connection(from_id, to_id)
-            
-        # 绘制所有节点
-        for node in self.orch_nodes.values():
-            self._orch_draw_node(node)
-            
-        # 更新滚动区域
-        self.orch_canvas.configure(scrollregion=self.orch_canvas.bbox("all"))
-
-    def _orch_update_connections(self, node_id: str) -> None:
-        """更新与指定节点相关的所有连接"""
-        # 找出相关的连接
-        related_connections = [
-            (from_id, to_id) 
-            for from_id, to_id in self.orch_connections 
-            if from_id == node_id or to_id == node_id
-        ]
-        
-        # 重绘这些连接
-        for from_id, to_id in related_connections:
-            # 删除旧线
-            if (from_id, to_id) in self.orch_connection_lines:
-                self.orch_canvas.delete(self.orch_connection_lines[(from_id, to_id)])
-            
-            # 绘制新线
-            self._orch_draw_connection(from_id, to_id)
-
-    def _orch_draw_all_connections(self) -> None:
-        """绘制所有连接线"""
-        for from_id, to_id in self.orch_connections:
-            if (from_id, to_id) not in self.orch_connection_lines:
-                self._orch_draw_connection(from_id, to_id)
-
-    def _orch_draw_connection(self, from_id: str, to_id: str) -> None:
-        """绘制两个节点之间的连接线（贝塞尔曲线）"""
-        if from_id not in self.orch_nodes or to_id not in self.orch_nodes:
-            return
-
-        from_node = self.orch_nodes[from_id]
-        to_node = self.orch_nodes[to_id]
-
-        # 起点：源节点右侧中心 (新尺寸: 160x70)
-        x1 = from_node.canvas_x + 160
-        y1 = from_node.canvas_y + 35
-
-        # 终点：目标节点左侧中心
-        x2 = to_node.canvas_x
-        y2 = to_node.canvas_y + 35
-
-        # 贝塞尔曲线控制点
-        cx1 = x1 + abs(x2 - x1) / 3
-        cy1 = y1
-        cx2 = x2 - abs(x2 - x1) / 3
-        cy2 = y2
-
-        # 生成曲线点
-        points = []
-        for t in [i / 20 for i in range(21)]:
-            px = (1-t)**3 * x1 + 3*(1-t)**2*t * cx1 + 3*(1-t)*t**2 * cx2 + t**3 * x2
-            py = (1-t)**3 * y1 + 3*(1-t)**2*t * cy1 + 3*(1-t)*t**2 * cy2 + t**3 * y2
-            points.extend([px, py])
-
-        # 删除旧线
-        key = (from_id, to_id)
-        if key in self.orch_connection_lines:
-            for item in self.orch_connection_lines[key]:
-                self.orch_canvas.delete(item)
-
-        items = []
-        
-        # 绘制光晕 (更粗的半透明线)
-        glow_id = self.orch_canvas.create_line(
-            points,
-            fill="#4fc3f7",
-            width=6,
-            smooth=True,
-            tags=("connection", f"conn_{from_id}_{to_id}"),
-        )
-        items.append(glow_id)
-        
-        # 绘制主线
-        line_id = self.orch_canvas.create_line(
-            points,
-            fill="#81d4fa",
-            width=3,
-            smooth=True,
-            arrow=tk.LAST,
-            arrowshape=(12, 15, 6),
-            tags=("connection", f"conn_{from_id}_{to_id}"),
-        )
-        items.append(line_id)
-        
-        self.orch_connection_lines[key] = items
-        self.orch_canvas.tag_lower("connection")
-
-    def _orch_draw_all_connections(self) -> None:
-        """重绘所有连接线"""
-        for from_id, to_id in self.orch_connections:
-            self._orch_draw_connection(from_id, to_id)
-
-    def _on_node_list_select(self, event) -> None:
-        """V6.0: 节点列表选择事件"""
-        selection = self.gen_queue_listbox.curselection()
-        if selection:
-            # 获取选中的节点并高亮
-            idx = selection[0]
-            node_ids = list(self.orch_nodes.keys())
-            if idx < len(node_ids):
-                node_id = node_ids[idx]
-                self._orch_select_node(node_id)
-
-    def _orch_on_canvas_click(self, event) -> None:
-        """画布点击事件"""
-        self.orch_canvas.focus_set()
-        
-        # 转换为画布坐标
-        cx = self.orch_canvas.canvasx(event.x)
-        cy = self.orch_canvas.canvasy(event.y)
-
-        # 检查是否点击了输出端口（开始连接）
-        items = self.orch_canvas.find_overlapping(cx - 8, cy - 8, cx + 8, cy + 8)
-        for item in items:
-            tags = self.orch_canvas.gettags(item)
-            for tag in tags:
-                if tag.startswith("output_") and tag != "output_port":
-                    node_id = tag.replace("output_", "")
-                    if node_id in self.orch_nodes:
-                        self.orch_connecting_from = node_id
-                        return
-
-        # 检查是否点击了节点
-        for item in items:
-            tags = self.orch_canvas.gettags(item)
-            for tag in tags:
-                if tag.startswith("node_"):
-                    node_id = tag.replace("node_", "")
-                    
-                    # 手动连接模式：点击目标节点完成连接
-                    if self.orch_manual_connect_from and self.orch_manual_connect_from != node_id:
-                        from_id = self.orch_manual_connect_from
-                        to_id = node_id
-                        conn = (from_id, to_id)
-                        if conn not in self.orch_connections:
-                            self.orch_connections.append(conn)
-                            self._orch_draw_connection(from_id, to_id)
-                            from_node = self.orch_nodes.get(from_id)
-                            to_node = self.orch_nodes.get(to_id)
-                            self.log(f"[编排] 🔗 已连接: {from_node.step_name} → {to_node.step_name}")
-                        self.orch_manual_connect_from = None
-                        if hasattr(self, 'orch_hint_label'):
-                            self.orch_hint_label.configure(text="连接完成")
-                        return
-                    
-                    self._orch_select_node(node_id)
-                    # 记录拖拽偏移
-                    node = self.orch_nodes.get(node_id)
-                    if node is None:
-                        return
-                    self.orch_drag_node_id = node_id
-                    self.orch_drag_offset = (cx - node.canvas_x, cy - node.canvas_y)
-                    return
-
-        # 点击空白区域，取消选择和手动连接模式
-        self._orch_deselect_node()
-        if self.orch_manual_connect_from:
-            self.orch_manual_connect_from = None
-            if hasattr(self, 'orch_hint_label'):
-                self.orch_hint_label.configure(text="手动连接已取消")
-
-    def _orch_on_canvas_drag(self, event) -> None:
-        """画布拖拽事件"""
-        cx = self.orch_canvas.canvasx(event.x)
-        cy = self.orch_canvas.canvasy(event.y)
-
-        # 正在创建连接
-        if self.orch_connecting_from:
-            if self.orch_temp_line_id:
-                self.orch_canvas.delete(self.orch_temp_line_id)
-
-            from_node = self.orch_nodes.get(self.orch_connecting_from)
-            if from_node:
-                # 修正连接线起点 (160x70)
-                x1 = from_node.canvas_x + 160
-                y1 = from_node.canvas_y + 35
-                self.orch_temp_line_id = self.orch_canvas.create_line(
-                    x1, y1, cx, cy,
-                    fill="#aaaaaa",
-                    width=2,
-                    dash=(5, 3),
-                )
-            return
-
-        # 正在拖拽节点
-        if self.orch_drag_node_id:
-            node = self.orch_nodes.get(self.orch_drag_node_id)
-            if node:
-                new_x = cx - self.orch_drag_offset[0]
-                new_y = cy - self.orch_drag_offset[1]
-                
-                # 允许拖拽到负坐标，但限制最小值为 0
-                new_x = max(0, new_x)
-                new_y = max(0, new_y)
-                
-                node.canvas_x = new_x
-                node.canvas_y = new_y
-                
-                self._orch_draw_node(node)
-                self._orch_update_connections(node.id)
-                
-                # 动态更新滚动区域
-                self.orch_canvas.configure(scrollregion=self.orch_canvas.bbox("all"))
-
-    def _orch_on_canvas_release(self, event) -> None:
-        """画布释放事件"""
-        cx = self.orch_canvas.canvasx(event.x)
-        cy = self.orch_canvas.canvasy(event.y)
-
-        # 完成连接
-        if self.orch_connecting_from:
-            if self.orch_temp_line_id:
-                self.orch_canvas.delete(self.orch_temp_line_id)
-                self.orch_temp_line_id = None
-
-            # 检查是否释放在输入端口上
-            items = self.orch_canvas.find_overlapping(cx - 10, cy - 10, cx + 10, cy + 10)
-            for item in items:
-                tags = self.orch_canvas.gettags(item)
-                for tag in tags:
-                    if tag.startswith("input_") and tag != "input_port":
-                        to_node_id = tag.replace("input_", "")
-                        if to_node_id != self.orch_connecting_from and to_node_id in self.orch_nodes:
-                            conn = (self.orch_connecting_from, to_node_id)
-                            if conn not in self.orch_connections:
-                                self.orch_connections.append(conn)
-                                self._orch_draw_connection(self.orch_connecting_from, to_node_id)
-                                self.log("[编排] 🔗 连接创建成功")
-                        break
-            
-            self.orch_connecting_from = None
-
-        # 结束拖拽
-        self.orch_drag_node_id = None
-
-
-    def _orch_on_canvas_double_click(self, event) -> None:
-        """画布双击事件 - 编辑节点名称"""
-        if self.orch_selected_node:
-            node = self.orch_nodes.get(self.orch_selected_node)
-            if node and hasattr(self, 'orch_prop_name_entry'):
-                # 聚焦到名称输入框
-                self.orch_prop_name_entry.focus_set()
-                self.orch_prop_name_entry.select_range(0, tk.END)
-
-    # V7.12: Right-click context menu for nodes
-    def _orch_on_canvas_right_click(self, event) -> None:
-        """Show context menu on right-click"""
-        cx = self.orch_canvas.canvasx(event.x)
-        cy = self.orch_canvas.canvasy(event.y)
-        
-        # Find clicked node
-        items = self.orch_canvas.find_overlapping(cx - 5, cy - 5, cx + 5, cy + 5)
-        clicked_node_id = None
-        for item in items:
-            tags = self.orch_canvas.gettags(item)
-            for tag in tags:
-                if tag.startswith("node_"):
-                    clicked_node_id = tag.replace("node_", "")
-                    break
-            if clicked_node_id:
-                break
-        
-        if not clicked_node_id or clicked_node_id not in self.orch_nodes:
-            self._orch_deselect_node()
-            return
-            
-        # Select the node and set focus (Critical for keyboard events)
-        self._orch_select_node(clicked_node_id)
-        self.orch_canvas.focus_set()
-        
-        # Create custom context menu (Gemini UI Style)
-        self._show_custom_context_menu(event.x_root, event.y_root, clicked_node_id)
-
-    def _create_context_menu_item(self, parent, text, command, text_color="#dddddd", hover_color="#3a3a3a"):
-        """Helper to create stylized menu items"""
-        btn = ctk.CTkButton(
-            parent, text=text, command=lambda: [self._close_context_menu(), command()],
-            fg_color="transparent", hover_color=hover_color, text_color=text_color,
-            anchor="w", height=32, corner_radius=4, font=("Segoe UI", 12)
-        )
-        btn.pack(fill="x", padx=4, pady=2)
-        return btn
-
-    def _close_context_menu(self, event=None):
-        """Close the custom context menu"""
-        if hasattr(self, '_context_menu_window') and self._context_menu_window:
-            self._context_menu_window.destroy()
-            self._context_menu_window = None
-
-    def _show_custom_context_menu(self, x, y, node_id):
-        """Show a modern, dark-themed context menu using CTkToplevel"""
-        self._close_context_menu()
-        
-        node = self.orch_nodes[node_id]
-        
-        # Create Toplevel for menu
-        menu = ctk.CTkToplevel()
-        menu.overrideredirect(True)
-        menu.attributes("-topmost", True)
-        menu.geometry(f"+{x}+{y}")
-        self._context_menu_window = menu
-        
-        # Close when losing focus (simulated click-outside behavior)
-        menu.bind("<FocusOut>", lambda e: self._close_context_menu() if str(e.widget) == str(menu) else None)
-        # Force focus to capture FocusOut
-        menu.after(50, menu.focus_set)
-        
-        # Main container with border
-        frame = ctk.CTkFrame(menu, fg_color="#2b2b2b", border_width=1, border_color="#444444", corner_radius=8)
-        frame.pack(fill="both", expand=True)
-        
-        # Header
-        lbl = ctk.CTkLabel(frame, text=f"  📌 {node.step_name}", anchor="w", font=("Segoe UI", 12, "bold"), text_color="#888")
-        lbl.pack(fill="x", pady=(6, 4), padx=4)
-        
-        ctk.CTkFrame(frame, height=1, fg_color="#444").pack(fill="x", pady=2, padx=4)
-        
-        # Items
-        self._create_context_menu_item(frame, "  🧪  单点测试", lambda: self._orch_test_node_by_id(node_id))
-        
-        bp_label = "  🔴  移除断点" if "[BREAKPOINT]" in node.context else "  🔵  设置断点"
-        self._create_context_menu_item(frame, bp_label, lambda: self._orch_toggle_breakpoint_by_id(node_id))
-        
-        ctk.CTkFrame(frame, height=1, fg_color="#444").pack(fill="x", pady=2, padx=4)
-        
-        self._create_context_menu_item(frame, "  ✏️  修改名称", lambda: self._orch_rename_node_dialog(node_id))
-        self._create_context_menu_item(frame, "  🔌  断开连接", lambda: self._orch_disconnect_node(node_id))
-        
-        ctk.CTkFrame(frame, height=1, fg_color="#444").pack(fill="x", pady=2, padx=4)
-        
-        self._create_context_menu_item(frame, "  🗑️  删除节点", lambda: self._orch_delete_node(node_id), text_color="#ff5555", hover_color="#4a1a1a")
-        
-        # Add a transparent overlay or bind click events to close? 
-        # FocusOut is mostly sufficient, but sometimes unreliable on Windows if clicks land on non-focusable windows.
-        # Adding an explicit 'Leave' or 'FocusOut' is improved by grab_set, but grab_set stops outside interaction.
-        # We'll stick to focus logic. A click outside usually triggers focus change.
-
-    def _orch_delete_selected_node(self, event=None) -> None:
-        """Delete currently selected node via keyboard"""
-        if self.orch_selected_node:
-            self._orch_delete_node(self.orch_selected_node)
-
-    def _orch_delete_node(self, node_id: str) -> None:
-        """Delete a node and its connections"""
-        if node_id not in self.orch_nodes:
-            return
-            
-        node = self.orch_nodes[node_id]
-        node_name = node.step_name
-        
-        # 1. Remove all connections involving this node
-        self._orch_disconnect_node(node_id)
-        
-        # 2. Remove canvas items
-        if node_id in self.orch_node_canvas_items:
-            for item_id in self.orch_node_canvas_items[node_id]:
-                self.orch_canvas.delete(item_id)
-            del self.orch_node_canvas_items[node_id]
-        
-        # 3. Remove from nodes dict
-        del self.orch_nodes[node_id]
-        
-        # 4. Clear selection
-        if self.orch_selected_node == node_id:
-            self._orch_deselect_node()
-        
-        # 5. Refresh listbox
-        self._orch_refresh_listbox()
-        
-        self.log(f"[编排] 🗑️ 已删除节点: {node_name}")
-
-    def _orch_disconnect_node(self, node_id: str) -> None:
-        """Disconnect all connections from/to a node"""
-        if node_id not in self.orch_nodes:
-            return
-            
-        # Find connections to remove
-        conns_to_remove = [
-            (from_id, to_id) for from_id, to_id in self.orch_connections 
-            if from_id == node_id or to_id == node_id
-        ]
-        
-        # Remove connection lines and entries
-        for from_id, to_id in conns_to_remove:
-            key = (from_id, to_id)
-            if key in self.orch_connection_lines:
-                for item_id in self.orch_connection_lines[key]:
-                    self.orch_canvas.delete(item_id)
-                del self.orch_connection_lines[key]
-            self.orch_connections.remove((from_id, to_id))
-        
-        if conns_to_remove:
-            self.log(f"[编排] 🔌 已断开 {len(conns_to_remove)} 个连接")
-
-    def _orch_rename_node_dialog(self, node_id: str) -> None:
-        """Show dialog to rename a node"""
-        if node_id not in self.orch_nodes:
-            return
-            
-        node = self.orch_nodes[node_id]
-        
-        # Simple input dialog
-        from tkinter import simpledialog
-        new_name = simpledialog.askstring(
-            "修改节点名称", 
-            f"当前名称: {node.step_name}\n请输入新名称:",
-            initialvalue=node.step_name,
-            parent=self.root
-        )
-        
-        if new_name and new_name.strip():
-            node.step_name = new_name.strip()
-            self._orch_draw_node(node)
-            self._orch_refresh_listbox()
-            self.log(f"[编排] ✏️ 节点已重命名为: {new_name}")
-
-    def _orch_select_node(self, node_id: str) -> None:
-        """选中节点"""
-        self.orch_selected_node = node_id
-        node = self.orch_nodes.get(node_id)
-        if node:
-            self._is_updating_ui = True
-            try:
-                # 更新属性面板变量 (deprecated)
-                self.orch_prop_name_var.set(node.step_name)
-                self.orch_prop_action_var.set(node.action_type)
-                self.orch_prop_params_var.set(node.params)
-                self.orch_prop_retry_var.set(str(node.retry_count))
-                self.orch_prop_optional_var.set(node.is_optional)
-                self.orch_prop_x1_var.set(str(node.coords.get("x1", 0)))
-                self.orch_prop_y1_var.set(str(node.coords.get("y1", 0)))
-                self.orch_prop_x2_var.set(str(node.coords.get("x2", 0)))
-                self.orch_prop_y2_var.set(str(node.coords.get("y2", 0)))
-                
-                # 同步到左侧面板 (Active)
-                if hasattr(self, 'gen_step_var'):
-                    self.gen_step_var.set(node.step_name)
-                if hasattr(self, 'gen_category_var'):
-                    category = self._find_category_for_action(node.action_type)
-                    self.gen_category_var.set(category)
-                    # Trigger category change logic manually if needed, or rely on command
-                    self._on_gen_category_change(category)
-                if hasattr(self, 'gen_action_var'):
-                    self.gen_action_var.set(node.action_type)
-                if hasattr(self, 'gen_param_var'):
-                    params_val = str(node.params)
-                    if node.action_type.startswith("IF") and params_val.startswith("op:"):
-                        try:
-                            parts = params_val.split("|", 1)
-                            op_code = parts[0].split(":")[1]
-                            value = parts[1] if len(parts) > 1 else ""
-                            
-                            rev_map = {
-                                "Contains": "包含 (Contains)",
-                                "NotContains": "不包含 (Not Contains)",
-                                "Equals": "等于 (Equals)",
-                                "NotEquals": "不等于 (Not Equals)"
-                            }
-                            if hasattr(self, 'gen_operator_var'):
-                                self.gen_operator_var.set(rev_map.get(op_code, "包含 (Contains)"))
-                            self.gen_param_var.set(value)
-                        except:
-                            self.gen_param_var.set(params_val)
-                    else:
-                        self.gen_param_var.set(params_val)
-                
-                # Update AI Context
-                if hasattr(self, 'gen_context_text'):
-                    self.gen_context_text.delete("1.0", tk.END)
-                    self.gen_context_text.insert("1.0", node.context)
-                    # V7.0: 绑定文本框修改事件
-                    self.gen_context_text.bind("<KeyRelease>", self._on_inspector_text_change)
-                    
-                # Update coordinates
-                if hasattr(self, 'gen_x1_var'):
-                    self.gen_x1_var.set(str(node.coords.get("x1", 0)))
-                    self.gen_y1_var.set(str(node.coords.get("y1", 0)))
-                    self.gen_x2_var.set(str(node.coords.get("x2", 0)))
-                    self.gen_y2_var.set(str(node.coords.get("y2", 0)))
-
-                # 更新提示标签（如果存在）
-                if hasattr(self, 'orch_hint_label'):
-                    self.orch_hint_label.configure(text=f"已选中: {node.step_name}")
-            finally:
-                self._is_updating_ui = False
-
-        self._orch_draw_all_nodes()
-
-    def _orch_deselect_node(self) -> None:
-        """取消选中"""
-        self.orch_selected_node = None
-        if hasattr(self, 'orch_hint_label'):
-            self.orch_hint_label.configure(text="点击节点查看属性")
-        self._orch_draw_all_nodes()
-
-    def _orch_delete_selected_node(self, event=None) -> None:
-        """删除选中的节点"""
-        if not self.orch_selected_node:
-            return
-
-        node_id = self.orch_selected_node
-        node = self.orch_nodes.get(node_id)
-
-        # 删除节点的画布元素
-        if node_id in self.orch_node_canvas_items:
-            for item_id in self.orch_node_canvas_items[node_id]:
-                self.orch_canvas.delete(item_id)
-            del self.orch_node_canvas_items[node_id]
-
-        # 删除相关连接
-        self.orch_connections = [
-            (f, t) for f, t in self.orch_connections
-            if f != node_id and t != node_id
-        ]
-
-        # 删除连接线
-        keys_to_delete = [k for k in self.orch_connection_lines if node_id in k]
-        for key in keys_to_delete:
-            self.orch_canvas.delete(self.orch_connection_lines[key])
-            del self.orch_connection_lines[key]
-
-        # 删除节点数据
-        if node_id in self.orch_nodes:
-            del self.orch_nodes[node_id]
-
-        self._orch_deselect_node()
-        self._orch_deselect_node()
-        self.log(f"[编排] 删除节点: {node.step_name if node else node_id}")
-        self._orch_refresh_listbox()
-
-    def _orch_save_node_properties(self) -> None:
-        """保存节点属性"""
-        if not self.orch_selected_node:
-            messagebox.showwarning("提示", "请先选择一个节点")
-            return
-
-        node = self.orch_nodes.get(self.orch_selected_node)
-        if not node:
-            return
-
-        node.step_name = self.orch_prop_name_var.get()
-        node.action_type = self.orch_prop_action_var.get()
-        node.params = self.orch_prop_params_var.get()
-
-        try:
-            node.retry_count = int(self.orch_prop_retry_var.get())
-        except ValueError:
-            node.retry_count = 0
-
-        node.is_optional = self.orch_prop_optional_var.get()
-
-        try:
-            node.coords = {
-                "x1": float(self.orch_prop_x1_var.get()),
-                "y1": float(self.orch_prop_y1_var.get()),
-                "x2": float(self.orch_prop_x2_var.get()),
-                "y2": float(self.orch_prop_y2_var.get()),
-            }
-        except ValueError:
-            pass
-
-        self._orch_draw_node(node)
-        self.log(f"[编排] 保存节点: {node.step_name}")
-        if hasattr(self, 'orch_hint_label'):
-            self.orch_hint_label.configure(text=f"已保存: {node.step_name}")
-
-    def _orch_insert_variable(self, var_name: str) -> None:
-        """插入变量到参数框"""
-        current = self.orch_prop_params_var.get()
-        self.orch_prop_params_var.set(current + f"${{{var_name}}}")
-
-    def _orch_sync_coords_from_live(self) -> None:
-        """从实时调试同步坐标和参数，并自动保存"""
-        try:
-            # 1. 同步坐标
-            self.orch_prop_x1_var.set(self.x1_var.get())
-            self.orch_prop_y1_var.set(self.y1_var.get())
-            self.orch_prop_x2_var.set(self.x2_var.get())
-            self.orch_prop_y2_var.set(self.y2_var.get())
-
-            # 2. 同步参数 (优先尝试 gen_param_var，其次 ocr_target_text_var)
-            param = self.gen_param_var.get().strip()
-            if not param:
-                param = self.ocr_target_text_var.get().strip()
-            
-            if param:
-                self.orch_prop_params_var.set(param)
-            
-            # 3. 自动保存到选中节点
-            if self.orch_selected_node:
-                node = self.orch_nodes.get(self.orch_selected_node)
-                if node:
-                    try:
-                        node.coords = {
-                            "x1": float(self.x1_var.get()),
-                            "y1": float(self.y1_var.get()),
-                            "x2": float(self.x2_var.get()),
-                            "y2": float(self.y2_var.get()),
-                        }
-                        node.params = self.orch_prop_params_var.get()
-                        self.log(f"[编排] ✅ 已同步并保存节点数据: {node.step_name}")
-                        self._orch_mark_node_success(node.id) # 给予视觉反馈
-                        self.root.after(1000, lambda: self._orch_draw_node(node)) # 1秒后恢复
-                    except ValueError:
-                        self.log("[编排] ⚠️ 坐标无效，未自动保存")
-            
-            self.log("[编排] 已从实时调试同步")
-        except Exception as e:
-            self.log(f"[编排] 同步失败: {e}")
-
-    def _orch_auto_connect(self) -> None:
-        """自动按顺序连接所有节点"""
-        if len(self.orch_nodes) < 2:
-            messagebox.showinfo("提示", "需要至少 2 个节点才能自动连接")
-            return
-
-        # 按 canvas_x 位置排序节点
-        sorted_nodes = sorted(self.orch_nodes.values(), key=lambda n: (n.canvas_x, n.canvas_y))
-
-        # 清除现有连接
-        self.orch_connections.clear()
-        for line_id in self.orch_connection_lines.values():
-            self.orch_canvas.delete(line_id)
-        self.orch_connection_lines.clear()
-
-        # 顺序连接
-        for i in range(len(sorted_nodes) - 1):
-            conn = (sorted_nodes[i].id, sorted_nodes[i + 1].id)
-            self.orch_connections.append(conn)
-
-        self._orch_draw_all_connections()
-        self.log(f"[编排] 自动连接 {len(self.orch_connections)} 条线")
-
-    def _orch_clear_canvas(self) -> None:
-        """清空画布"""
-        if not self.orch_nodes:
-            return
-
-        if not messagebox.askyesno("确认", "确定要清空画布吗？所有节点和连接都将被删除。"):
-            return
-
-        self.orch_canvas.delete("node")
-        self.orch_canvas.delete("connection")
-        self.orch_nodes.clear()
-        self.orch_connections.clear()
-        self.orch_node_canvas_items.clear()
-        self.orch_connection_lines.clear()
-        self._orch_deselect_node()
-        self._orch_draw_grid()
-        self._orch_refresh_listbox()
-        self.log("[编排] 画布已清空")
-
-    def _orch_export_json(self) -> None:
-        """导出为 JSON 文件"""
-        if not self.orch_nodes:
-            messagebox.showwarning("提示", "画布上没有节点")
-            return
-
-        # 拓扑排序获取执行顺序
-        ordered_nodes = self._orch_topological_sort()
-
-        export_data = []
-        for i, node in enumerate(ordered_nodes, 1):
-            export_data.append({
-                "step_id": i,
-                "step_name": node.step_name,
-                "action_type": node.action_type,
-                "params": node.params,
-                "context": node.context,
-                "coords": node.coords,
-                "retry_count": node.retry_count,
-                "is_optional": node.is_optional,
-            })
-
-        filepath = filedialog.asksaveasfilename(
-            title="导出流程",
-            defaultextension=".json",
-            filetypes=[("JSON 文件", "*.json"), ("所有文件", "*.*")],
-            initialfile="workflow.json",
-        )
-
-        if not filepath:
-            return
-
-        try:
-            with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(export_data, f, ensure_ascii=False, indent=2)
-            self.log(f"[编排] 已导出: {filepath}")
-            messagebox.showinfo("导出成功", f"已导出 {len(export_data)} 个步骤到:\n{filepath}")
-        except Exception as e:
-            messagebox.showerror("导出失败", str(e))
-
-    def _orch_import_json(self) -> None:
-        """从 JSON 文件导入"""
-        filepath = filedialog.askopenfilename(
-            title="导入流程",
-            filetypes=[("JSON 文件", "*.json"), ("所有文件", "*.*")],
-        )
-
-        if not filepath:
-            return
-
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            if not isinstance(data, list):
-                raise ValueError("JSON 格式错误：根元素必须是数组")
-
-            # 清空现有画布
-            self._orch_clear_canvas_silent()
-
-            # 导入节点
-            for i, item in enumerate(data):
-                node_id = str(uuid.uuid4())[:8]
-                node = WorkflowNode(
-                    id=node_id,
-                    action_type=item.get("action_type", "Click Region"),
-                    step_name=item.get("step_name", f"Step {i + 1}"),
-                    params=item.get("params", ""),
-                    context=item.get("context", ""),
-                    coords=item.get("coords", {"x1": 0, "y1": 0, "x2": 0, "y2": 0}),
-                    canvas_x=150 + i * 180,
-                    canvas_y=100 + (i % 3) * 100,
-                    retry_count=item.get("retry_count", 0),
-                    is_optional=item.get("is_optional", False),
-                )
-                self.orch_nodes[node_id] = node
-
-            self._orch_draw_all_nodes()
-            self._orch_auto_connect()
-            self.log(f"[编排] 已导入 {len(self.orch_nodes)} 个节点")
-            self._orch_refresh_listbox()
-            messagebox.showinfo("导入成功", f"已导入 {len(self.orch_nodes)} 个节点")
-
-        except Exception as e:
-            messagebox.showerror("导入失败", str(e))
-
-    def _orch_clear_canvas_silent(self) -> None:
-        """静默清空画布（不弹窗确认）"""
-        self.orch_canvas.delete("node")
-        self.orch_canvas.delete("connection")
-        self.orch_nodes.clear()
-        self.orch_connections.clear()
-        self.orch_node_canvas_items.clear()
-        self.orch_connection_lines.clear()
-        self._orch_deselect_node()
-        self._orch_draw_grid()
-        self._orch_refresh_listbox()
-
-    def _orch_clear_canvas_items(self) -> None:
-        """清除画布上的所有元素记录（用于重绘）"""
-        self.orch_canvas.delete("all")
-        self.orch_node_canvas_items.clear()
-        self.orch_connection_lines.clear()
-        self._orch_draw_grid()
-
-    def _orch_on_canvas_pan_start(self, event):
-        """画布拖拽开始（中键或 Ctrl+左键）"""
-        self.orch_canvas.scan_mark(event.x, event.y)
-
-    def _orch_on_canvas_pan_drag(self, event):
-        """画布拖拽中"""
-        self.orch_canvas.scan_dragto(event.x, event.y, gain=1)
-        self.orch_connection_lines.clear()
-        self._orch_deselect_node()
-
-    def _orch_topological_sort(self) -> List[WorkflowNode]:
-        """拓扑排序获取节点执行顺序"""
-        if not self.orch_connections:
-            # 没有连接，按位置排序
-            return sorted(self.orch_nodes.values(), key=lambda n: (n.canvas_x, n.canvas_y))
-
-        # 构建邻接表和入度
-        in_degree = {node_id: 0 for node_id in self.orch_nodes}
-        adj = {node_id: [] for node_id in self.orch_nodes}
-
-        for from_id, to_id in self.orch_connections:
-            if from_id in adj and to_id in in_degree:
-                adj[from_id].append(to_id)
-                in_degree[to_id] += 1
-
-        # Kahn 算法
-        queue = [nid for nid, deg in in_degree.items() if deg == 0]
-        result = []
-
-        while queue:
-            # 按位置排序选择下一个节点（当多个入度为0时）
-            queue.sort(key=lambda nid: (self.orch_nodes[nid].canvas_x, self.orch_nodes[nid].canvas_y))
-            node_id = queue.pop(0)
-            result.append(self.orch_nodes[node_id])
-
-            for neighbor in adj[node_id]:
-                in_degree[neighbor] -= 1
-                if in_degree[neighbor] == 0:
-                    queue.append(neighbor)
-
-        # 如果有孤立节点，追加到末尾
-        for node in self.orch_nodes.values():
-            if node not in result:
-                result.append(node)
-
-        return result
-
-    def _orch_run_all(self) -> None:
-        """V6.0: 运行全部节点 (alias)"""
-        self._orch_run_workflow()
-
-    def _orch_run_workflow(self) -> None:
-        """运行当前编排的全部工作流节点"""
-        if not self.orch_nodes:
-            messagebox.showwarning("提示", "画布上没有节点")
-            return
-
-        if not self.device:
-            messagebox.showwarning("提示", "请先连接设备")
-            return
-
-        # 获取排序后的节点
-        ordered_nodes = self._orch_topological_sort()
-        total_steps = len(ordered_nodes)
-        
-        # 导出为执行格式
-        export_data = []
-        for i, node in enumerate(ordered_nodes, 1):
-            export_data.append({
-                "step_id": i,
-                "step_name": node.step_name,
-                "action_type": node.action_type,
-                "params": node.params,
-                "context": node.context,
-                "coords": node.coords,
-                "retry_count": node.retry_count,
-                "is_optional": node.is_optional,
-                "_node_id": node.id,  # 用于高亮
-            })
-
-        # 尝试使用 WorkflowRunner
-        try:
-            from workflow_runner import WorkflowRunner
-
-            runner = WorkflowRunner(
-                self.device,
-                phone_width=self.phone_width,
-                phone_height=self.phone_height,
-            )
-
-            self.log(f"[编排] 🚀 开始执行 {total_steps} 个步骤...")
-            if hasattr(self, 'orch_hint_label'):
-                self.orch_hint_label.configure(text=f"执行中: 0/{total_steps}")
-            
-            success_count = 0
-            fail_count = 0
-
-            for i, step in enumerate(export_data):
-                node_id = step.pop("_node_id")
-                step_name = step.get("step_name", f"Step {step['step_id']}")
-                action_type = step.get("action_type", "Unknown")
-
-                # 高亮当前执行的节点
-                self._orch_highlight_executing_node(node_id)
-                if hasattr(self, 'orch_hint_label'):
-                    self.orch_hint_label.configure(text=f"执行中: {i+1}/{total_steps} - {step_name}")
-                self.root.update()
-
-                self.log(f"[编排] ▶️ [{i+1}/{total_steps}] {step_name} - {action_type}")
-
-                # 执行步骤
-                success = runner.execute_step(step, {})
-
-                if success:
-                    success_count += 1
-                    self._orch_mark_node_success(node_id)
-                    self.log(f"[编排] ✅ 完成: {step_name}")
-                else:
-                    fail_count += 1
-                    is_optional = step.get("is_optional", False)
-                    self._orch_mark_node_failed(node_id)
-                    
-                    if is_optional:
-                        self.log(f"[编排] ⚠️ 步骤失败 (可选): {step_name}")
-                    else:
-                        self.log(f"[编排] ❌ 步骤失败: {step_name}")
-                        messagebox.showerror("执行失败", f"步骤 [{step['step_id']}] {step_name} 执行失败")
-                        break
-
-                self.root.update()
-
-            # 恢复节点样式
-            self.orch_running_node = None
-            self.root.after(2000, self._orch_draw_all_nodes)
-
-            # 汇总结果
-            self.log(f"[编排] 🏁 执行完成: {success_count} 成功, {fail_count} 失败")
-            if hasattr(self, 'orch_hint_label'):
-                self.orch_hint_label.configure(text=f"完成: {success_count}✓ {fail_count}✗")
-            
-            if fail_count == 0:
-                messagebox.showinfo("执行完成", f"全部 {total_steps} 个步骤执行成功！")
-
-        except ImportError:
-            self.log("[编排] ❌ 未找到 workflow_runner.py")
-            messagebox.showerror("错误", "未找到 workflow_runner.py\n请确保该文件在同一目录下")
-        except Exception as e:
-            self.log(f"[编排] ❌ 执行失败: {e}")
-            messagebox.showerror("执行失败", str(e))
-            
-    def _orch_highlight_executing_node(self, node_id: str) -> None:
-        """高亮正在执行的节点（黄色边框）并自动滚动"""
-        self._orch_set_running_node(node_id)
-            
-    def _orch_set_running_node(self, node_id: str) -> None:
-        """设置当前运行节点，重绘并自动滚动"""
-        self.orch_running_node = node_id
-        
-        # Redraw ALL nodes to ensure previous running node is cleared
-        self._orch_draw_all_nodes()
-        
-        # Auto-scroll using shared helper
-        self._orch_scroll_to_node(node_id)
-            
-    def _orch_mark_node_success(self, node_id: str) -> None:
-        """标记节点执行成功（绿色边框）"""
-        if node_id not in self.orch_node_canvas_items:
-            return
-        items = self.orch_node_canvas_items[node_id]
-        if items:
-            self.orch_canvas.itemconfig(items[0], outline="#00FF00", width=3)
-            
-    def _orch_mark_node_failed(self, node_id: str) -> None:
-        """标记节点执行失败（红色边框）"""
-        if node_id not in self.orch_node_canvas_items:
-            return
-        items = self.orch_node_canvas_items[node_id]
-        if items:
-            self.orch_canvas.itemconfig(items[0], outline="#FF0000", width=3)
-
-    # ==================== 新功能: 单点测试 ====================
-    
-    def _orch_test_selected_node(self) -> None:
-        """测试选中的单个节点"""
-        if not self.orch_selected_node:
-            messagebox.showwarning("提示", "请先选择一个节点")
-            return
-        
-        if not self.device:
-            messagebox.showwarning("提示", "请先连接设备")
-            return
-        
-        node = self.orch_nodes.get(self.orch_selected_node)
-        if not node:
-            return
-        
-        self.log(f"[编排] 🧪 单点测试: {node.step_name}")
-        
-        # 构造步骤数据
-        step_data = {
-            "step_id": 1,
-            "step_name": node.step_name,
-            "action_type": node.action_type,
-            "params": node.params,
-            "coords": node.coords,
-        }
-        
-        try:
-            from workflow_runner import WorkflowRunner
-            
-            runner = WorkflowRunner(
-                self.device,
-                phone_width=self.phone_width,
-                phone_height=self.phone_height,
-            )
-            
-            self._orch_highlight_executing_node(node.id)
-            self.root.update()
-            
-            success = runner.execute_step(step_data, {})
-            
-            if success:
-                self._orch_mark_node_success(node.id)
-                self.log(f"[编排] ✅ 单点测试成功: {node.step_name}")
-                messagebox.showinfo("测试成功", f"节点 {node.step_name} 执行成功！")
-            else:
-                self._orch_mark_node_failed(node.id)
-                self.log(f"[编排] ❌ 单点测试失败: {node.step_name}")
-                messagebox.showerror("测试失败", f"节点 {node.step_name} 执行失败")
-            
-            # 2秒后恢复样式
-            self.root.after(2000, lambda: self._orch_draw_node(node))
-            
-        except ImportError:
-            messagebox.showerror("错误", "未找到 workflow_runner.py")
-        except Exception as e:
-            self.log(f"[编排] ❌ 单点测试失败: {e}")
-            messagebox.showerror("测试失败", str(e))
-
-    # ==================== 新功能: 断点调试 ====================
-    
-    def _orch_toggle_breakpoint(self) -> None:
-        """切换选中节点的断点状态"""
-        if not self.orch_selected_node:
-            messagebox.showwarning("提示", "请先选择一个节点")
-            return
-        
-        node = self.orch_nodes.get(self.orch_selected_node)
-        if not node:
-            return
-        
-        # 使用 context 字段存储断点标记
-        if "[BREAKPOINT]" in node.context:
-            node.context = node.context.replace("[BREAKPOINT]", "").strip()
-            self.log(f"[编排] 🔵 移除断点: {node.step_name}")
-        else:
-            node.context = f"[BREAKPOINT] {node.context}".strip()
-            self.log(f"[编排] 🔴 设置断点: {node.step_name}")
-        
-        # 重绘节点以显示断点标记
-        self._orch_draw_node(node)
-        if hasattr(self, 'orch_hint_label'):
-            self.orch_hint_label.configure(text=f"断点: {'已设置' if '[BREAKPOINT]' in node.context else '已移除'}")
-    
-    def _orch_run_with_breakpoints(self) -> None:
-        """带断点调试运行 - 在断点处暂停"""
-        if not self.orch_nodes:
-            messagebox.showwarning("提示", "画布上没有节点")
-            return
-
-        if not self.device:
-            messagebox.showwarning("提示", "请先连接设备")
-            return
-
-        ordered_nodes = self._orch_topological_sort()
-        total_steps = len(ordered_nodes)
-        
-        self.log(f"[编排] ⏸️ 断点调试模式启动 ({total_steps} 个步骤)...")
-        
-        try:
-            from workflow_runner import WorkflowRunner
-            
-            runner = WorkflowRunner(
-                self.device,
-                phone_width=self.phone_width,
-                phone_height=self.phone_height,
-            )
-            
-            for i, node in enumerate(ordered_nodes):
-                # 检查断点
-                if "[BREAKPOINT]" in node.context:
-                    self._orch_highlight_executing_node(node.id)
-                    if hasattr(self, 'orch_hint_label'):
-                        self.orch_hint_label.configure(text=f"⏸️ 断点暂停: {node.step_name}")
-                    self.root.update()
-                    
-                    result = messagebox.askquestion(
-                        "断点暂停",
-                        f"在节点 [{i+1}] {node.step_name} 处暂停\n\n"
-                        f"动作: {node.action_type}\n"
-                        f"参数: {node.params}\n\n"
-                        "是否继续执行？",
-                        icon="question"
-                    )
-                    
-                    if result != "yes":
-                        self.log("[编排] ⏹️ 用户中止调试")
-                        self._orch_draw_all_nodes()
-                        return
-                
-                # 执行步骤
-                step_data = {
-                    "step_id": i + 1,
-                    "step_name": node.step_name,
-                    "action_type": node.action_type,
-                    "params": node.params,
-                    "coords": node.coords,
-                    "retry_count": node.retry_count,
-                    "is_optional": node.is_optional,
-                }
-                
-                self._orch_highlight_executing_node(node.id)
-                if hasattr(self, 'orch_hint_label'):
-                    self.orch_hint_label.configure(text=f"执行: {i+1}/{total_steps} - {node.step_name}")
-                self.root.update()
-                
-                success = runner.execute_step(step_data, {})
-                
-                if success:
-                    self._orch_mark_node_success(node.id)
-                    self.log(f"[编排] ✅ [{i+1}/{total_steps}] {node.step_name}")
-                else:
-                    self._orch_mark_node_failed(node.id)
-                    if not node.is_optional:
-                        self.log(f"[编排] ❌ 步骤失败: {node.step_name}")
-                        messagebox.showerror("执行失败", f"步骤 {node.step_name} 失败")
-                        break
-                
-                self.root.update()
-            
-            self.log("[编排] 🏁 断点调试完成")
-            self.root.after(2000, self._orch_draw_all_nodes)
-            
-        except Exception as e:
-            self.log(f"[编排] ❌ 调试失败: {e}")
-            messagebox.showerror("调试失败", str(e))
-
-    # ==================== 新功能: 连接管理 ====================
-    
-    def _orch_delete_selected_connection(self) -> None:
-        """删除选中的连接（需要先点击连接线）"""
-        if not self.orch_connections:
-            messagebox.showinfo("提示", "没有连接可删除")
-            return
-        
-        # 如果有选中的节点，删除与该节点相关的所有连接
-        if self.orch_selected_node:
-            node_id = self.orch_selected_node
-            connections_to_remove = [
-                conn for conn in self.orch_connections
-                if conn[0] == node_id or conn[1] == node_id
-            ]
-            
-            if not connections_to_remove:
-                messagebox.showinfo("提示", "选中节点没有连接")
-                return
-            
-            for conn in connections_to_remove:
-                self.orch_connections.remove(conn)
-                if conn in self.orch_connection_lines:
-                    self.orch_canvas.delete(self.orch_connection_lines[conn])
-                    del self.orch_connection_lines[conn]
-            
-            self.log(f"[编排] ✂️ 删除 {len(connections_to_remove)} 条连接")
-            messagebox.showinfo("已删除", f"删除了 {len(connections_to_remove)} 条连接")
-        else:
-            # 删除最后一条连接
-            if self.orch_connections:
-                conn = self.orch_connections.pop()
-                if conn in self.orch_connection_lines:
-                    self.orch_canvas.delete(self.orch_connection_lines[conn])
-                    del self.orch_connection_lines[conn]
-                self.log(f"[编排] ✂️ 删除连接: {conn[0]} → {conn[1]}")
-    
-    def _orch_start_manual_connect(self) -> None:
-        """开始手动连接模式"""
-        if not self.orch_selected_node:
-            messagebox.showinfo("提示", "请先选择起始节点，然后点击此按钮，再点击目标节点")
-            return
-        
-        self.orch_manual_connect_from = self.orch_selected_node
-        node = self.orch_nodes.get(self.orch_selected_node)
-        if hasattr(self, 'orch_hint_label'):
-            self.orch_hint_label.configure(text=f"🔗 从 {node.step_name} 连接到... (点击目标节点)")
-        self.log(f"[编排] 🔗 手动连接模式: 从 {node.step_name} 开始，点击目标节点完成连接")
-    
-    def _orch_on_right_click(self, event) -> None:
-        """右键菜单"""
-        # 创建右键菜单
-        menu = tk.Menu(self.orch_canvas, tearoff=0)
-        
-        # 检查是否点击了节点
-        items = self.orch_canvas.find_overlapping(event.x - 5, event.y - 5, event.x + 5, event.y + 5)
-        clicked_node_id = None
-        
-        for item in items:
-            tags = self.orch_canvas.gettags(item)
-            for tag in tags:
-                if tag.startswith("node_"):
-                    clicked_node_id = tag.replace("node_", "")
-                    break
-        
-        if clicked_node_id:
-            node = self.orch_nodes.get(clicked_node_id)
-            if node:
-                menu.add_command(label=f"🧪 测试: {node.step_name}", 
-                               command=lambda: self._orch_test_node_by_id(clicked_node_id))
-                menu.add_command(label="🔴 切换断点", 
-                               command=lambda: self._orch_toggle_breakpoint_by_id(clicked_node_id))
-                menu.add_separator()
-                menu.add_command(label="✂️ 断开所有连接", 
-                               command=lambda: self._orch_disconnect_node(clicked_node_id))
-                menu.add_command(label="🗑️ 删除节点", 
-                               command=lambda: self._orch_delete_node_by_id(clicked_node_id))
-        else:
-            menu.add_command(label="🔗 自动连接所有", command=self._orch_auto_connect)
-            menu.add_command(label="🗑️ 清空画布", command=self._orch_clear_canvas)
-        
-        menu.tk_popup(event.x_root, event.y_root)
-    
-    def _orch_test_node_by_id(self, node_id: str) -> None:
-        """通过 ID 测试节点"""
-        self.orch_selected_node = node_id
-        self._orch_test_selected_node()
-    
-    def _orch_toggle_breakpoint_by_id(self, node_id: str) -> None:
-        """通过 ID 切换断点"""
-        self.orch_selected_node = node_id
-        self._orch_toggle_breakpoint()
-    
-    def _orch_disconnect_node(self, node_id: str) -> None:
-        """断开节点的所有连接"""
-        self.orch_selected_node = node_id
-        self._orch_delete_selected_connection()
-    
-    def _orch_delete_node_by_id(self, node_id: str) -> None:
-        """通过 ID 删除节点"""
-        self.orch_selected_node = node_id
-        self._orch_draw_all_nodes()
-        self._orch_delete_selected_node()
-
-    def _orch_disconnect_selected_node_all(self) -> None:
-        """V7.5: 断开选中节点的所有连接"""
-        if not self.orch_selected_node:
-            messagebox.showinfo("提示", "请先选择要断开的节点")
-            return
-            
-        node_id = self.orch_selected_node
-        
-        # 筛选出要保留的连接
-        new_conns = []
-        removed_count = 0
-        
-        keys_to_delete = []
-        
-        for conn in self.orch_connections:
-            if conn[0] == node_id or conn[1] == node_id:
-                # 删除对应的线段
-                key = f"{conn[0]}_{conn[1]}"
-                if key in self.orch_connection_lines:
-                    keys_to_delete.append(key)
-                removed_count += 1
-            else:
-                new_conns.append(conn)
-        
-        # 执行删除
-        for key in keys_to_delete:
-            self.orch_canvas.delete(self.orch_connection_lines[key])
-            del self.orch_connection_lines[key]
-            
-        self.orch_connections = new_conns
-        self.log(f"[编排] 🔌 已断开节点所有连接 ({removed_count} 条)")
-
-    def _orch_test_click_region(self) -> None:
-        """V7.5: 测试点击当前节点区域 (静态测试)"""
-        if not self.orch_selected_node:
-            messagebox.showinfo("提示", "请先选择要测试的节点")
-            return
-            
-        if not self.device:
-            messagebox.showwarning("警告", "请先连接设备")
-            return
-            
-        node = self.orch_nodes.get(self.orch_selected_node)
-        if not node:
-            return
-
-        coords = node.coords
-        try:
-            # 计算中心点
-            x1 = float(coords.get("x1", 0))
-            y1 = float(coords.get("y1", 0))
-            x2 = float(coords.get("x2", 0))
-            y2 = float(coords.get("y2", 0))
-            
-            if x1 == 0 and x2 == 0:
-                 # 防止误点 (0,0)
-                 self.log("[测试] ⚠️ 坐标无效 (0,0)")
-                 return
-
-            cx = (x1 + x2) / 2
-            cy = (y1 + y2) / 2
-            
-            # 获取设备分辨率
-            w, h = self.device.window_size()
-            
-            px = int(cx * w)
-            py = int(cy * h)
-            
-            self.device.click(px, py)
-            self.log(f"[测试] 👆 点击坐标: ({px}, {py}) [{w}x{h}]")
-            
-        except Exception as e:
-            self.log(f"[测试] ❌ 点击失败: {e}")
-            messagebox.showerror("错误", f"点击测试失败: {e}")
-
-    def _show_extension_import(self):
-        """V7.9: Show Extension Import & Manage Dialog"""
-        dialog = ctk.CTkToplevel(self.root)
-        dialog.title("Extension Node Manager")
-        width = 900
-        height = 600
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        x = (screen_width - width) // 2
-        y = (screen_height - height) // 2
-        dialog.geometry(f"{width}x{height}+{x}+{y}")
-        dialog.attributes("-topmost", True)
-        
-        # 2 Columns
-        dialog.grid_columnconfigure(0, weight=1)
-        dialog.grid_columnconfigure(1, weight=1)
-        dialog.grid_rowconfigure(0, weight=1)
-        
-        # === Left: Import ===
-        left_frame = ctk.CTkFrame(dialog)
-        left_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        
-        ctk.CTkLabel(left_frame, text="📥 导入 (粘贴 AI JSON)", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=5)
-        text_box = ctk.CTkTextbox(left_frame)
-        text_box.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        def do_import():
-            json_str = text_box.get("1.0", "end")
-            success, msg = self.ext_manager.import_extension(json_str)
-            if success:
-                messagebox.showinfo("Success", f"{msg}\n\n请重启应用生效。", parent=dialog)
-                # Clear and refresh
-                text_box.delete("1.0", "end")
-                refresh_list()
-            else:
-                messagebox.showerror("Error", f"导入失败:\n{msg}", parent=dialog)
-                
-        ctk.CTkButton(left_frame, text="✅ 确认导入", command=do_import, fg_color="green").pack(pady=10)
-        
-        # === Right: Manage ===
-        right_frame = ctk.CTkFrame(dialog)
-        right_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
-        
-        ctk.CTkLabel(right_frame, text="🗑️ 管理已安装扩展", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=5)
-        
-        list_frame = ctk.CTkScrollableFrame(right_frame)
-        list_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        def refresh_list():
-            for widget in list_frame.winfo_children():
-                widget.destroy()
-            
-            nodes = self.ext_manager.load_nodes_metadata()
-            if not nodes:
-                ctk.CTkLabel(list_frame, text="(无扩展)", text_color="gray").pack(pady=20)
-                return
-
-            for node in nodes:
-                row = ctk.CTkFrame(list_frame)
-                row.pack(fill="x", pady=2)
-                
-                name = node.get("name", "Unknown")
-                icon = node.get("icon", "")
-                
-                # Try render icon if image
-                icon_txt = f"{icon} "
-                if ".png" in str(icon).lower():
-                    icon_txt = "🖼️ "
-
-                ctk.CTkLabel(row, text=f"{icon_txt}{name}", anchor="w", font=ctk.CTkFont(size=12)).pack(side="left", padx=10)
-                
-                def do_delete(n=name):
-                    if messagebox.askyesno("确认", f"确定删除扩展 '{n}' 吗?\n(代码将保留但失效)", parent=dialog):
-                        if self.ext_manager.delete_node(n):
-                            refresh_list()
-                            messagebox.showinfo("提示", "已删除，请重启应用。", parent=dialog)
-                        else:
-                            messagebox.showerror("错误", "删除失败。", parent=dialog)
-                            
-                ctk.CTkButton(row, text="🗑️", width=30, height=24, fg_color="#C0392B", command=do_delete).pack(side="right", padx=5, pady=2)
-
-        refresh_list()
 
     def run(self) -> None:
         try:
@@ -5847,6 +4308,13 @@ if __name__ == "__main__":
         print("\n[系统] 🛑 捕获 Ctrl+C，程序正在退出...")
         try:
             if 'app' in globals() and app.root.winfo_exists():
+                # V8.2: Fix Terminal "invalid command" errors
+                # Cancel all pending after callbacks if possible
+                try:
+                    for id in app.root.tk.call('after', 'info'):
+                        app.root.after_cancel(id)
+                except: pass
+                
                 app.root.quit()
                 app.root.destroy()
         except Exception:

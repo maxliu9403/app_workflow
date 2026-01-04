@@ -61,6 +61,11 @@ class DeviceMixin:
                 text=f"状态：已连接 {serial}（{self.phone_width}x{self.phone_height}）",
                 text_color="#66cc66",
             )
+            # V9.0: Sync to Global Var Library
+            if hasattr(self, 'global_vars'):
+                 self.global_vars['DeviceID'] = serial
+                 self.log(f"[Global] Set DeviceID = {serial}")
+
             self.log(f"已连接设备：{serial}")
         except AdbError as e:
             self.device = None

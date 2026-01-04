@@ -81,6 +81,9 @@ class VisionService:
         image: np.ndarray,
         region: Optional[RoiPct] = None,
         region_offset: Tuple[int, int] = (0, 0),
+        preprocess: str = "Default",
+        threshold: int = 127,
+        engine: str = "PaddleOCR"
     ) -> List[Dict[str, Any]]:
         """
         运行 OCR 识别
@@ -89,18 +92,37 @@ class VisionService:
             image: BGR 图像（numpy 数组）
             region: 可选的识别区域（百分比）
             region_offset: 区域偏移（用于坐标转换）
+            preprocess: 预处理模式 (Default/Grayscale/Binary/Otsu)
+            threshold: 二值化阈值 (仅 Binary 模式有效)
+            engine: OCR 引擎 (PaddleOCR/Tesseract)
             
         Returns:
-            识别结果列表，每项包含:
-            - text: 识别的文字
-            - box: 边界框坐标
-            - confidence: 置信度
+            识别结果列表
         """
         if not self.is_ocr_available():
             return []
         
+        # 1. 预处理
+        img_to_proc = image
+        if preprocess == "Grayscale":
+            img_to_proc = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        elif preprocess == "Binary":
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            _, img_to_proc = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+        elif preprocess == "Otsu":
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            _, img_to_proc = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
         try:
-            result = self._ocr_engine(image)
+            # 2. 引擎选择 (目前主要支持 RapidOCR/PaddleOCR，Tesseract 可扩展)
+            if "Tesseract" in engine:
+                # Mock Tesseract or implement if pytesseract is available
+                # import pytesseract
+                # text = pytesseract.image_to_string(img_to_proc, lang='chi_sim')
+                # For now, fallback to RapidOCR/Paddle but log warning or implement later
+                pass 
+
+            result = self._ocr_engine(img_to_proc)
             if result is None:
                 return []
             

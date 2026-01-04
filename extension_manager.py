@@ -111,3 +111,11 @@ class ExtensionManager:
         except Exception as e:
             print(f"Delete failed: {e}")
             return False
+
+    def load_actions_map(self):
+        """
+        Alias for load_custom_functions()
+        Returns dict: {function_name: callable}
+        Used by WorkflowRunner
+        """
+        return self.load_custom_functions()

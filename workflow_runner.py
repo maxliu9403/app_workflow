@@ -79,6 +79,7 @@ class WorkflowRunner:
         ocr_engine=None,
         phone_width: int = 1080,
         phone_height: int = 2400,
+        global_vars: Dict[str, Any] = None # V9.0: Global Vars
     ):
         """
         初始化工作流执行器
@@ -89,12 +90,14 @@ class WorkflowRunner:
             ocr_engine: 可选，OCR 引擎实例（如 RapidOCR）
             phone_width: 手机屏幕宽度（像素）
             phone_height: 手机屏幕高度（像素）
+            global_vars: 全局变量字典
         """
         self.device = device
         self.human_device = human_device
         self.ocr_engine = ocr_engine
         self.phone_width = phone_width
         self.phone_height = phone_height
+        self.global_context = global_vars if global_vars else {} # Base context
 
         # 尝试自动获取屏幕分辨率
         self._update_screen_resolution()
@@ -124,7 +127,169 @@ class WorkflowRunner:
             "Wait Until Disappear": self._action_wait_until_disappear,
             # System
             "Wait Time": self._action_wait_time,
+            # Network (V8.3)
+            "HTTP Request": self._action_http_request,
         }
+
+    # ==================== V8.3: HTTP Action ====================
+    def _action_http_request(self, step: Dict[str, Any], row_data: Dict[str, Any]) -> bool:
+        """
+        HTTP Request Node: 执行外部 API 调用
+        Params JSON structure:
+        {
+            "url": "http://api.example.com",
+            "port": 80,
+            "method": "POST",
+            "body": "{\"id\": \"${DeviceID}\"}",
+            "timeout": 10,
+            "logic": "res.code == 200"
+        }
+        """
+        import json
+        import requests
+        
+        # 1. Parse JSON Params
+        # 1. Parse JSON Params
+        raw_params = step.get("params", "{}")
+        if isinstance(raw_params, dict):
+            params_dict = raw_params
+        else:
+            try:
+                params_dict = json.loads(str(raw_params))
+            except:
+                # Maybe it's not JSON but just a URL? Fallback or Error
+                logger.error(f"❌ HTTP Request params invalid JSON: {raw_params}")
+                return False
+
+        # 2. Extract & Inject Variables
+        # Built-in context: DeviceID
+        context_data = row_data.copy()
+        if self.device:
+            context_data["DeviceID"] = self.device.serial
+            
+        url = self._inject_variables(params_dict.get("url", ""), context_data)
+        # Port removed
+        method = params_dict.get("method", "GET").strip().upper()  # Ensure UPPERCASE for safety (Fix 405)
+        
+        # Body Processing (Dict Support)
+        body_raw = params_dict.get("body", "")
+        json_payload = None
+        
+        # Try to parse body as JSON Dict (from Key-Value Editor)
+        if body_raw and body_raw.strip().startswith("{"):
+            try:
+                body_dict = json.loads(body_raw)
+                if isinstance(body_dict, dict):
+                    # Inject variables into each value
+                    injected_dict = {}
+                    for k, v in body_dict.items():
+                        injected_dict[k] = self._inject_variables(str(v), context_data)
+                    json_payload = injected_dict
+            except Exception as e:
+                logger.warning(f"⚠️ HTTP Body JSON parse failed, sending raw: {e}")
+
+        # If not dict or parse failed, fallback to raw string injection (legacy or text mode)
+        data_payload = None
+        if json_payload is None:
+             data_payload = self._inject_variables(body_raw, context_data).encode('utf-8') if body_raw else None
+
+        timeout = int(params_dict.get("timeout", 10))
+        logic_expr = params_dict.get("logic", "res.status_code == 200")
+
+        # Port Logic Removed (User provides full URL)
+
+        logger.info(f"🌐 HTTP Request: {method} {url}")
+        if json_payload:
+            logger.info(f"📦 Body (JSON): {json_payload}")
+
+        # 3. Execute Request
+        try:
+            # Determine mapping: GET/DELETE use params (Query String), POST/PUT use json (Body)
+            req_kwargs = {
+                "method": method,
+                "url": url,
+                "timeout": timeout,
+                "headers": {} # Init headers
+            }
+            
+            # Map payload
+            if method in ["GET", "DELETE", "HEAD", "OPTIONS"]:
+                if json_payload:
+                    req_kwargs["params"] = json_payload
+                elif data_payload:
+                     # Rare case: Raw string for GET params? Usually not supported well.
+                     # But requests might handle it? No, params must be dict/bytes.
+                     # If raw string, maybe append to URL manually?
+                     # For now, just ignore data_payload for GET if it's raw string, or try to parse?
+                     pass
+            else:
+                # POST/PUT/PATCH
+                if json_payload:
+                    req_kwargs["json"] = json_payload
+                    # Requests sets Content-Type: application/json automatically
+                elif data_payload:
+                    req_kwargs["data"] = data_payload
+            
+            resp = requests.request(**req_kwargs)
+            
+            # 4. Parse Response
+            try:
+                res_json = resp.json()
+            except:
+                res_json = {"text": resp.text}
+            
+            # Helper: DotDict for easy access (res.json.data)
+            class DotDict(dict):
+                __getattr__ = dict.get
+                __setattr__ = dict.__setitem__
+                __delattr__ = dict.__delitem__
+
+            def make_dot_dict(d):
+                if isinstance(d, dict):
+                    return DotDict({k: make_dot_dict(v) for k, v in d.items()})
+                if isinstance(d, list):
+                    return [make_dot_dict(i) for i in d]
+                return d
+
+            # 5. Logic Evaluation
+            class ResWrapper:
+                def __init__(self, r, j):
+                    self.status = r.status_code # Alias for user friendliness
+                    self.code = r.status_code
+                    self.status_code = r.status_code
+                    self.json = make_dot_dict(j)
+                    self.text = r.text
+            
+            res_obj = ResWrapper(resp, res_json)
+            
+            # Logic Expression Eval
+            eval_context = {"res": res_obj, "resp": res_obj, "json": res_json}
+            
+            # Auto-replace single '=' with '==' for friendliness
+            # Ensure we don't break ==, !=, >=, <=
+            # Regex: Lookbehind not (!=,>=,<=,==) and Lookahead not (=)
+            # Actually simpler: just replace strictly " = " might be safest, but users might not type spaces.
+            # Let's use negative lookbehind/ahead.
+            import re
+            cleaned_expr = logic_expr
+            if "=" in cleaned_expr:
+                try:
+                     cleaned_expr = re.sub(r'(?<![=!<>])=(?![=])', '==', logic_expr)
+                except:
+                     pass
+
+            success = eval(cleaned_expr, {"__builtins__": {}}, eval_context)
+            
+            if success:
+                logger.info(f"✅ API Success: {logic_expr} (Code: {resp.status_code})")
+                return True
+            else:
+                logger.warning(f"⚠️ API Failed Logic: {logic_expr} (Code: {resp.status_code})")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ HTTP Request Error: {e}")
+            return False
 
         # V7.9: Load Custom Actions
         self.ext_manager = ExtensionManager()
@@ -168,6 +333,12 @@ class WorkflowRunner:
         Returns:
             bool: 执行成功返回 True，失败返回 False
         """
+        # V9.0: Global Context Merge
+        effective_data = self.global_context.copy()
+        if row_data:
+            effective_data.update(row_data)
+        row_data = effective_data
+
         row_data = row_data or {}
 
         # 1. 加载 JSON 文件
@@ -245,8 +416,10 @@ class WorkflowRunner:
             if action_type == "LOOP (Count)":
                 count = 5  # 默认循环5次
                 try:
-                    count = int(step.get("params", "5"))
-                except ValueError:
+                    # V9.0: Variable Injection
+                    count_val = self._evaluate_expression(step.get("params", "5"), row_data)
+                    count = int(float(count_val)) # Handle "5.0"
+                except (ValueError, TypeError):
                     pass
                 self._loop_stack.append({
                     "start_idx": idx,
@@ -258,7 +431,8 @@ class WorkflowRunner:
                 continue
 
             if action_type == "LOOP (Until Text)":
-                target_text = step.get("params", "")
+                # V9.0: Variable Injection
+                target_text = self._evaluate_expression(step.get("params", ""), row_data)
                 self._loop_stack.append({
                     "start_idx": idx,
                     "max_iter": 20,  # 安全上限
@@ -349,6 +523,12 @@ class WorkflowRunner:
         Returns:
             bool: 执行成功返回 True，失败返回 False
         """
+        # V9.0: Global Context Merge
+        effective_data = self.global_context.copy()
+        if row_data:
+            effective_data.update(row_data)
+        row_data = effective_data
+
         step_id = step.get("step_id", 0)
         step_name = step.get("step_name", "Unknown")
         action_type = step.get("action_type", "Unknown")
@@ -419,8 +599,26 @@ class WorkflowRunner:
 
         def replacer(match):
             key = match.group(1)
-            value = row_data.get(key, match.group(0))  # 未找到则保留原样
-            return str(value)
+            
+            # V9.1: Smart Lookup (Case-Insensitive Fallback)
+            if key not in row_data:
+                # Try finding case-insensitive match
+                key_lower = key.lower()
+                for k in row_data:
+                    if k.lower() == key_lower:
+                        logger.warning(f"⚠️ Variable Case Mismatch: '${{{key}}}' -> Found '{k}'")
+                        return str(row_data[k])
+                
+                # Check for common typos (e.g., DeviceID vs DevicelD)
+                if key == "DevicelD" and "DeviceID" in row_data:
+                     logger.warning(f"⚠️ Variable Typo Detected: '${{{key}}}' -> Auto-correcting to 'DeviceID'")
+                     return str(row_data["DeviceID"])
+
+                # Not found
+                logger.warning(f"⚠️ Variable Not Found: '${{{key}}}' | Available keys: {list(row_data.keys())}")
+                return match.group(0)
+
+            return str(row_data.get(key, match.group(0)))
 
         return re.sub(pattern, replacer, text)
 
@@ -830,6 +1028,8 @@ class WorkflowRunner:
     ) -> bool:
         """Wait Time: 固定等待"""
         params = step.get("params", "")
+        # V9.0: Variable Injection
+        params = self._evaluate_expression(params, row_data)
 
         # 尝试从 params 提取数字
         wait_seconds = 1.0  # 默认 1 秒
@@ -939,6 +1139,9 @@ class WorkflowRunner:
     ) -> bool:
         """Check Image: 模板匹配检查图片是否存在"""
         params = step.get("params", "")
+        # V9.0: Variable Injection
+        params = self._evaluate_expression(params, row_data)
+        
         if not params:
             logger.warning("⚠️ Check Image 需要指定模板路径")
             return False

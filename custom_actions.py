@@ -147,3 +147,32 @@ def action_double_click(runner, step, row_data):
     runner.device.click(cx, cy)
 
     return True
+
+
+# Action: 启动应用
+def action_launch_app(runner, step, row_data):
+    """
+    启动指定包名的应用
+    """
+    # 1. 获取参数中的包名
+    package_name = step.get('params', '').strip()
+    
+    # 2. 支持简单的变量替换 (如果输入是 ${PkgName} 格式)
+    if package_name.startswith('${') and package_name.endswith('}'):
+        var_key = package_name[2:-1]
+        package_name = row_data.get(var_key, package_name)
+
+    # 3. 校验包名
+    if not package_name:
+        print("❌ 错误: 未提供 App 包名")
+        return False
+
+    try:
+        # 4. 使用 adbutils 的 app_start 方法启动应用
+        # 这通常比 am start 命令更稳定，因为它会自动查找 Main Activity
+        runner.device.app_start(package_name)
+        print(f"✅ 已启动应用: {package_name}")
+        return True
+    except Exception as e:
+        print(f"❌ 启动失败: {e}")
+        return False
