@@ -199,63 +199,13 @@ class WorkflowDesignerMixin:
             if hasattr(self, 'gen_action_var'):
                 self.gen_action_var.set(node.action_type)
 
-            # 2. 处理参数 (特殊处理 IF 逻辑操作符)
-            if hasattr(self, 'gen_param_var'):
-                params_val = str(node.params)
-                # 检查类似 "op:Contains|target_text" 的格式
-                if node.action_type.startswith("IF") and params_val.startswith("op:"):
-                    try:
-                        parts = params_val.split("|", 1)
-                        op_code = parts[0].split(":")[1]
-                        value = parts[1] if len(parts) > 1 else ""
-                        
-                        rev_map = {
-                            "Contains": "包含 (Contains)",
-                            "NotContains": "不包含 (Not Contains)",
-                            "Equals": "等于 (Equals)",
-                            "NotEquals": "不等于 (Not Equals)"
-                        }
-                        if hasattr(self, 'gen_operator_var'):
-                            self.gen_operator_var.set(rev_map.get(op_code, "包含 (Contains)"))
-                        self.gen_param_var.set(value)
-                    except:
-                        self.gen_param_var.set(params_val)
-                else:
-                    self.gen_param_var.set(params_val)
-                    
-                    # V8.3: HTTP Params Deserialization
-                    if node.action_type == "HTTP Request":
-                        try:
-                            import json
-                            p_data = json.loads(params_val)
-                            if hasattr(self, 'http_url_var'): self.http_url_var.set(p_data.get("url", ""))
-                            # Port removed
-                            if hasattr(self, 'http_method_var'): self.http_method_var.set(p_data.get("method", "GET"))
-                            if hasattr(self, 'http_logic_var'): self.http_logic_var.set(p_data.get("logic", "res.status_code == 200"))
-                            if hasattr(self, 'http_timeout_var'): self.http_timeout_var.set(str(p_data.get("timeout", "10")))
-                            
-                            
-                            body_cnt = p_data.get("body", "")
-                            # V8.3: Structured Body Load
-                            if hasattr(self, 'http_kv_rows'):
-                                # Clear existing rows
-                                for r in self.http_kv_rows[:]:
-                                    self._remove_http_kv_row(r[2])
-                                
-                                # Load key-values
-                                if body_cnt and body_cnt.strip().startswith("{"):
-                                    try:
-                                        body_dict = json.loads(body_cnt)
-                                        if isinstance(body_dict, dict):
-                                            for k, v in body_dict.items():
-                                                self._add_http_kv_row(str(k), str(v))
-                                    except:
-                                        pass
-                            
-                            if hasattr(self, 'http_body_content'):
-                                self.http_body_content = body_cnt
-                        except:
-                            pass
+            # 2. 处理参数 (Dynamic Inspector V10.3)
+            if hasattr(self, 'load_params_into_form'):
+                # 使用新版动态表单加载参数
+                self.load_params_into_form(node.action_type, str(node.params))
+            elif hasattr(self, 'gen_param_var'):
+                # Legacy Fallback
+                self.gen_param_var.set(str(node.params))
 
             # 3. 更新 Context 文本框 (如果存在)
             if hasattr(self, 'gen_context_text'):
@@ -1099,7 +1049,7 @@ class WorkflowDesignerMixin:
     # ==================== Layer 3 Supplement: Debug & Test ====================
 
     def _orch_test_selected_node(self) -> None:
-        """测试选中的单个节点"""
+        """V10.0: 测试选中的单个节点 - 使用第一行 Excel 数据"""
         if not self.orch_selected_node:
             messagebox.showwarning("提示", "请先选择一个节点")
             return
@@ -1111,6 +1061,14 @@ class WorkflowDesignerMixin:
         node = self.orch_nodes.get(self.orch_selected_node)
         if not node:
             return
+        
+        # V10.1: Get first data row (skip header at index 0)
+        row_data = {}
+        if hasattr(self, 'materials_data') and len(self.materials_data) >= 2:
+            row_data = self.materials_data[1].copy()
+            self.log(f"[调试] 📊 使用第1行数据 (Excel第2行): {list(row_data.keys())}")
+        elif hasattr(self, 'global_vars') and self.global_vars:
+            row_data = self.global_vars.copy()
         
         self.log(f"[编排] 🧪 单点测试: {node.step_name}")
         
@@ -1129,12 +1087,19 @@ class WorkflowDesignerMixin:
                 self.device,
                 phone_width=self.phone_width,
                 phone_height=self.phone_height,
+                global_vars=getattr(self, 'global_vars', {})
             )
             
             self._orch_highlight_executing_node(node.id)
             self.root.update()
             
-            success = runner.execute_step(step_data, {})
+            # V10.0: Pass row_data to execute_step
+            success = runner.execute_step(step_data, row_data)
+            
+            # V10.0: Refresh Variable Watcher after execution
+            if hasattr(self, '_refresh_variable_watcher'):
+                self.workflow_runner = runner  # Store runner for variable watcher
+                self._refresh_variable_watcher()
             
             if success:
                 self._orch_mark_node_success(node.id)
@@ -1261,7 +1226,12 @@ class WorkflowDesignerMixin:
                     self.orch_hint_label.configure(text=f"执行: {i+1}/{total_steps} - {node.step_name}")
                 self.root.update()
                 
-                success = runner.execute_step(step_data, {})
+                # V10.0: Get first row of materials for variable injection
+                row_data = {}
+                if hasattr(self, 'materials_data') and self.materials_data:
+                    row_data = self.materials_data[0].copy()
+                
+                success = runner.execute_step(step_data, row_data)
                 
                 if success:
                     self._orch_mark_node_success(node.id)
@@ -1477,12 +1447,204 @@ class WorkflowDesignerMixin:
         for node in self.orch_nodes.values():
             if node not in result:
                 result.append(node)
-
         return result
 
     def _orch_run_all(self) -> None:
-        """V6.0: 运行全部节点 (alias)"""
+        """V6.0: 运行全部节点 (alias) - 使用第一行数据"""
         self._orch_run_workflow()
+
+    def _orch_test_first_row(self) -> None:
+        """V10.0: 🧪 测试第一行数据 - 用于快速验证变量替换是否正常"""
+        if not self.orch_nodes:
+            messagebox.showwarning("提示", "画布上没有节点")
+            return
+
+        if not self.device:
+            messagebox.showwarning("提示", "请先连接设备")
+            return
+        
+        # Check if materials_data exists and has data rows (not just header)
+        if not hasattr(self, 'materials_data') or len(self.materials_data) < 2:
+            result = messagebox.askyesno(
+                "提示", 
+                "Excel 中没有数据行（仅有表头）。\n\n"
+                "是否继续使用全局变量测试？\n"
+                "(建议先点击📂按钮加载包含数据的 Excel)"
+            )
+            if not result:
+                return
+        
+        row_data = {}
+        if hasattr(self, 'materials_data') and len(self.materials_data) >= 2:
+            # V10.1: Use index 1 to skip header row (index 0)
+            row_data = self.materials_data[1].copy()
+            self.log(f"[测试] 📊 使用第一行数据 (Excel第2行): {row_data}")
+        elif hasattr(self, 'global_vars'):
+            row_data = self.global_vars.copy()
+            self.log(f"[测试] 🌐 使用全局变量: {row_data}")
+        
+        # Run workflow with this single row
+        self.log("[测试] 🧪 开始第一行数据测试...")
+        self._orch_run_workflow_with_data(row_data)
+
+    def _orch_run_batch_all(self) -> None:
+        """V10.0: 📊 批量执行 - 遍历所有 Excel 行数据"""
+        if not self.orch_nodes:
+            messagebox.showwarning("提示", "画布上没有节点")
+            return
+
+        if not self.device:
+            messagebox.showwarning("提示", "请先连接设备")
+            return
+        
+        # Check materials_data has data rows (not just header)
+        if not hasattr(self, 'materials_data') or len(self.materials_data) < 2:
+            messagebox.showwarning(
+                "无数据", 
+                "Excel 中没有数据行！\n\n"
+                "请确保 Excel 至少有 2 行（表头 + 数据）。\n"
+                "点击节点编辑器左侧的📂按钮选择 Excel 文件。"
+            )
+            return
+        
+        # V10.1: Skip header row (index 0), use [1:]
+        data_rows = self.materials_data[1:]
+        total_rows = len(data_rows)
+        
+        # Confirm before batch execution
+        if not messagebox.askyesno(
+            "确认批量执行",
+            f"将对 {total_rows} 行数据执行工作流。\n\n"
+            f"预览第一行: {list(data_rows[0].items())[:3]}...\n\n"
+            "确定继续？"
+        ):
+            return
+        
+        self.log(f"[批量] 🚀 开始批量执行 {total_rows} 行数据...")
+        
+        success_rows = 0
+        failed_rows = 0
+        
+        # V10.1: Iterate over data_rows (skipped header)
+        for idx, row_data in enumerate(data_rows, start=1):
+            self.log(f"[批量] ━━━ 第 {idx}/{total_rows} 行 (Excel第{idx+1}行) ━━━")
+            
+            if hasattr(self, 'orch_hint_label'):
+                self.orch_hint_label.configure(text=f"批量: {idx}/{total_rows}")
+            self.root.update()
+            
+            try:
+                success = self._orch_run_workflow_with_data(row_data, silent=True)
+                if success:
+                    success_rows += 1
+                    self.log(f"[批量] ✅ 第 {idx} 行完成")
+                else:
+                    failed_rows += 1
+                    self.log(f"[批量] ❌ 第 {idx} 行失败")
+                    
+                    # Ask whether to continue on failure
+                    if not messagebox.askyesno(
+                        "行执行失败",
+                        f"第 {idx} 行执行失败。\n\n是否继续执行剩余行？"
+                    ):
+                        break
+            except Exception as e:
+                failed_rows += 1
+                self.log(f"[批量] ❌ 第 {idx} 行异常: {e}")
+                break
+        
+        self.log(f"[批量] 🏁 批量执行完成: {success_rows} 成功, {failed_rows} 失败")
+        messagebox.showinfo(
+            "批量执行完成",
+            f"执行结果:\n\n"
+            f"✅ 成功: {success_rows} 行\n"
+            f"❌ 失败: {failed_rows} 行"
+        )
+
+    def _orch_run_workflow_with_data(self, row_data: dict, silent: bool = False) -> bool:
+        """V10.0: 使用指定行数据执行工作流
+        
+        Args:
+            row_data: Excel 行数据字典 {'A': 'value', 'B': 'value', ...}
+            silent: 是否静默模式（不弹窗）
+        
+        Returns:
+            bool: 执行成功返回 True
+        """
+        ordered_nodes = self._orch_topological_sort()
+        total_steps = len(ordered_nodes)
+        
+        export_data = []
+        for i, node in enumerate(ordered_nodes, 1):
+            export_data.append({
+                "step_id": i,
+                "step_name": node.step_name,
+                "action_type": node.action_type,
+                "params": node.params,
+                "context": node.context,
+                "coords": node.coords,
+                "retry_count": node.retry_count,
+                "is_optional": node.is_optional,
+                "_node_id": node.id,
+            })
+
+        try:
+            from workflow_runner import WorkflowRunner
+
+            runner = WorkflowRunner(
+                self.device,
+                phone_width=self.phone_width,
+                phone_height=self.phone_height,
+                global_vars=getattr(self, 'global_vars', {})
+            )
+            
+            # Store runner reference for variable watcher
+            self.workflow_runner = runner
+
+            if not silent:
+                self.log(f"[执行] 🚀 开始执行 {total_steps} 个步骤...")
+            
+            all_success = True
+            
+            for i, step in enumerate(export_data):
+                node_id = step.pop("_node_id")
+                step_name = step.get("step_name", f"Step {step['step_id']}")
+
+                self._orch_highlight_executing_node(node_id)
+                if hasattr(self, 'orch_hint_label'):
+                    self.orch_hint_label.configure(text=f"执行中: {i+1}/{total_steps}")
+                self.root.update()
+
+                success = runner.execute_step(step, row_data)
+
+                if success:
+                    self._orch_mark_node_success(node_id)
+                else:
+                    self._orch_mark_node_failed(node_id)
+                    is_optional = step.get("is_optional", False)
+                    
+                    if not is_optional:
+                        if not silent:
+                            self.log(f"[执行] ❌ 步骤失败: {step_name}")
+                        all_success = False
+                        break
+                
+                self.root.update()
+            
+            # Refresh variable watcher
+            if hasattr(self, '_refresh_variable_watcher'):
+                self._refresh_variable_watcher()
+
+            self.orch_running_node = None
+            self.root.after(1000, self._orch_draw_all_nodes)
+            
+            return all_success
+
+        except Exception as e:
+            self.log(f"[执行] ❌ 执行失败: {e}")
+            if not silent:
+                messagebox.showerror("执行失败", str(e))
+            return False
 
     def _orch_toggle_pause(self, event=None) -> None:
         """V8.0: Toggle Global Pause State (F8)"""
@@ -1580,7 +1742,12 @@ class WorkflowDesignerMixin:
                          self.orch_log_text.see("end")
                     except: pass
 
-                success = runner.execute_step(step, {})
+                # V10.0: Get first row of materials data for variable injection
+                row_data = {}
+                if hasattr(self, 'materials_data') and self.materials_data:
+                    row_data = self.materials_data[0].copy()
+                
+                success = runner.execute_step(step, row_data)
 
                 if success:
                     success_count += 1
@@ -1599,6 +1766,11 @@ class WorkflowDesignerMixin:
                         break
 
                 self.root.update()
+            
+            # V10.0: Store runner for variable watcher
+            self.workflow_runner = runner
+            if hasattr(self, '_refresh_variable_watcher'):
+                self._refresh_variable_watcher()
 
             self.orch_running_node = None
             self.root.after(2000, self._orch_draw_all_nodes)

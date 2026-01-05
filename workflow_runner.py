@@ -45,6 +45,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from extension_manager import ExtensionManager
 
+# V10.0: Import from refactored modules
+from core.variable_store import VariableStore
+from core.action_library import ActionLibrary, StepData, ACTION_MAPPING
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -97,7 +101,13 @@ class WorkflowRunner:
         self.ocr_engine = ocr_engine
         self.phone_width = phone_width
         self.phone_height = phone_height
-        self.global_context = global_vars if global_vars else {} # Base context
+        self.global_context = global_vars if global_vars else {}
+
+        # V10.0: Initialize VariableStore
+        self.variable_store = VariableStore(
+            row_data={},
+            global_context=self.global_context
+        )
 
         # 尝试自动获取屏幕分辨率
         self._update_screen_resolution()
@@ -129,7 +139,26 @@ class WorkflowRunner:
             "Wait Time": self._action_wait_time,
             # Network (V8.3)
             "HTTP Request": self._action_http_request,
+            # Data Processing (V10.2)
+            "Load Excel Data": self._action_load_excel_data,
+            # Logic Mapping
+            "IF (Check Text)": self._action_check_text, 
+            "IF (Check Image)": self._action_check_image,
+            # Variable Actions (V10.0)
+            "Set Variable": self._action_set_variable,
+            "Print Variable": self._action_print_variable,
         }
+        
+        # Initialize OCR if not provided (Lazy Load or Auto)
+        if self.ocr_engine is None:
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+                self.ocr_engine = RapidOCR()
+                logger.info("👁️ RapidOCR Engine Initialized")
+            except ImportError:
+                logger.warning("⚠️ RapidOCR not found. Vision actions will fail.")
+            except Exception as e:
+                logger.error(f"❌ Failed to init OCR: {e}")
 
     # ==================== V8.3: HTTP Action ====================
     def _action_http_request(self, step: Dict[str, Any], row_data: Dict[str, Any]) -> bool:
@@ -291,6 +320,43 @@ class WorkflowRunner:
             logger.error(f"❌ HTTP Request Error: {e}")
             return False
 
+    # ==================== V10.2: Data Processing Wrappers ====================
+    def _action_load_excel_data(self, step: Dict[str, Any], row_data: Dict[str, Any]) -> bool:
+        """Load Excel Data Wrapper"""
+        # Adapt workflow runner args (step dict) to ActionLibrary args (StepData)
+        step_data = StepData(
+            action_type=step.get("action_type", ""),
+            step_name=step.get("step_name", ""),
+            params=step.get("params", ""),
+            coords=step.get("coords", {})
+        )
+        
+        # Use ActionLibrary
+        return ActionLibrary.action_load_excel_data(
+            device=self.device,
+            step_data=step_data,
+            context=self.variable_store
+        )
+
+    def _action_set_variable(self, step: Dict[str, Any], row_data: Dict[str, Any]) -> bool:
+        """Wrapper for Set Variable"""
+        step_data = StepData(step)
+        return ActionLibrary.action_set_variable(
+            device=self.device,
+            step_data=step_data,
+            context=self.variable_store
+        )
+
+    def _action_print_variable(self, step: Dict[str, Any], row_data: Dict[str, Any]) -> bool:
+        """Wrapper for Print Variable"""
+        step_data = StepData(step)
+        return ActionLibrary.action_print_variable(
+            device=self.device,
+            step_data=step_data,
+            context=self.variable_store
+        )
+
+
         # V7.9: Load Custom Actions
         self.ext_manager = ExtensionManager()
         self._load_custom_actions()
@@ -298,7 +364,8 @@ class WorkflowRunner:
         # 逻辑节点列表 (不通过 handler 执行，在主循环中处理)
         self._logic_actions = {
             "IF (Check Text)", "IF (Check Image)", "ELSE", "END IF",
-            "LOOP (Count)", "LOOP (Until Text)", "BREAK", "END LOOP"
+            "LOOP (Count)", "LOOP (Until Text)", "LOOP LIST", "BREAK", "END LOOP",
+            "Set Variable", "Print Variable"  # V10.0: Variable Actions
         }
         
         # V5.0: 控制流状态
@@ -340,6 +407,15 @@ class WorkflowRunner:
         row_data = effective_data
 
         row_data = row_data or {}
+        
+        # V10.0: Load row_data into VariableStore
+        self.variable_store = VariableStore(
+            row_data=row_data,
+            global_context=self.global_context
+        )
+        # Add DeviceID to context
+        if self.device:
+            self.variable_store.set_variable("DeviceID", self.device.serial, "str")
 
         # 1. 加载 JSON 文件
         try:
@@ -362,6 +438,7 @@ class WorkflowRunner:
         # 2. V5.0: 重置控制流状态
         self._skip_mode = False
         self._if_nest_level = 0
+        self._loop_stack: List[Dict[str, Any]] = [] # V10.0: Reset loop stack
         
         # 3. 逐步执行（带控制流）
         total_steps = len(steps)
@@ -432,10 +509,10 @@ class WorkflowRunner:
 
             if action_type == "LOOP (Until Text)":
                 # V9.0: Variable Injection
-                target_text = self._evaluate_expression(step.get("params", ""), row_data)
+                target_text = self.variable_store.evaluate_expression(step.get("params", ""))
                 self._loop_stack.append({
                     "start_idx": idx,
-                    "max_iter": 20,  # 安全上限
+                    "max_iter": 20,
                     "current": 0,
                     "type": "until_text",
                     "target": target_text
@@ -443,15 +520,91 @@ class WorkflowRunner:
                 logger.info(f"🔁 [{idx}/{total_steps}] LOOP (Until Text: '{target_text}')")
                 continue
 
+            # V10.0: LOOP LIST - 遍历列表
+            if action_type == "LOOP LIST":
+                params = step.get("params", "")
+                # 解析格式: ${ListName} as ${Item}
+                match = re.match(r"\$\{(\w+)\}\s+as\s+\$\{(\w+)\}", params.strip())
+                if not match:
+                    logger.error(f"❌ LOOP LIST 参数格式错误: {params} (应为: ${{List}} as ${{Item}})")
+                    continue
+                
+                list_name = match.group(1)
+                item_name = match.group(2)
+                
+                # 从变量库获取列表
+                list_data = self.variable_store.get_variable(list_name, [])
+                if not isinstance(list_data, list):
+                    logger.warning(f"⚠️ LOOP LIST: ${{{list_name}}} 不是列表，尝试解析")
+                    if isinstance(list_data, str):
+                        try:
+                            list_data = json.loads(list_data)
+                        except:
+                            list_data = [list_data] if list_data else []
+                    else:
+                        list_data = [list_data] if list_data else []
+                
+                if not list_data:
+                    logger.warning(f"⚠️ LOOP LIST: ${{{list_name}}} 为空，跳过循环")
+                    # 找到对应的 END LOOP 并跳过
+                    loop_level = 1
+                    for scan_idx in range(idx + 1, len(steps)):
+                        scan_action = steps[scan_idx].get("action_type", "")
+                        if scan_action in ("LOOP (Count)", "LOOP (Until Text)", "LOOP LIST"):
+                            loop_level += 1
+                        elif scan_action == "END LOOP":
+                            loop_level -= 1
+                            if loop_level == 0:
+                                break
+                    continue
+                
+                # 设置第一个元素
+                self.variable_store.set_variable(item_name, list_data[0], "auto")
+                
+                self._loop_stack.append({
+                    "start_idx": idx,
+                    "max_iter": len(list_data),
+                    "current": 0,
+                    "type": "list",
+                    "list_data": list_data,
+                    "item_name": item_name
+                })
+                logger.info(f"🔁 [{idx}/{total_steps}] LOOP LIST (${{{list_name}}} as ${{{item_name}}}, 共 {len(list_data)} 项)")
+                continue
+
+            # V10.0: Set Variable - 设置变量
+            if action_type == "Set Variable":
+                params = step.get("params", "")
+                if "=" in params:
+                    eq_idx = params.index("=")
+                    key = params[:eq_idx].strip()
+                    value_expr = params[eq_idx + 1:].strip()
+                    evaluated = self.variable_store.evaluate_expression(value_expr)
+                    self.variable_store.set_variable(key, evaluated, "auto")
+                    logger.info(f"📝 [{idx}/{total_steps}] Set Variable: ${{{key}}} = {evaluated}")
+                else:
+                    logger.error(f"❌ Set Variable 格式错误: {params}")
+                continue
+
+            # V10.0: Print Variable - 打印变量
+            if action_type == "Print Variable":
+                params = step.get("params", "").strip()
+                if params:
+                    value = self.variable_store.evaluate_expression(params)
+                    logger.info(f"💬 [{idx}/{total_steps}] Print: {params} = {value}")
+                else:
+                    # 打印所有变量
+                    logger.info(f"💬 [{idx}/{total_steps}] All Variables: {self.variable_store.variables}")
+                continue
+
             if action_type == "BREAK":
                 if self._loop_stack:
-                    # 找到对应的 END LOOP 并跳转
                     loop_level = len(self._loop_stack)
                     for scan_idx in range(idx, len(steps)):
                         if steps[scan_idx].get("action_type") == "END LOOP":
                             loop_level -= 1
                             if loop_level == 0:
-                                idx = scan_idx  # 跳到 END LOOP
+                                idx = scan_idx
                                 break
                     self._loop_stack.pop()
                     logger.info(f"⏹️ [{idx}/{total_steps}] BREAK - 跳出循环")
@@ -466,12 +619,16 @@ class WorkflowRunner:
                     if loop["type"] == "count":
                         continue_loop = loop["current"] < loop["max_iter"]
                     elif loop["type"] == "until_text":
-                        # 检查目标文字是否出现
                         found = self._action_check_text({"params": loop["target"]}, row_data)
                         continue_loop = not found and loop["current"] < loop["max_iter"]
+                    elif loop["type"] == "list":
+                        # V10.0: List loop - 设置下一个元素
+                        if loop["current"] < loop["max_iter"]:
+                            item_value = loop["list_data"][loop["current"]]
+                            self.variable_store.set_variable(loop["item_name"], item_value, "auto")
+                            continue_loop = True
                     
                     if continue_loop:
-                        # 跳回循环开始
                         logger.info(f"🔚 [{idx}/{total_steps}] END LOOP - 继续 (迭代 {loop['current']}/{loop['max_iter']})")
                         idx = loop["start_idx"]
                         continue
@@ -767,9 +924,16 @@ class WorkflowRunner:
             logger.warning(f"⚠️ 无法自动获取屏幕分辨率: {e}")
 
     def _get_screenshot_for_ocr(self):
-        """获取截图用于 OCR"""
+        """获取截图用于 OCR (转换为 numpy 格式)"""
         try:
-            return self.device.screenshot()
+            # 1. 获取 PIL Image
+            pil_img = self.device.screenshot()
+            
+            # 2. 转换为 numpy (RapidOCR 需要)
+            import numpy as np
+            img_np = np.array(pil_img)
+            logger.info(f"📸 Generated Screenshot Type: {type(img_np)}")
+            return img_np
         except Exception as e:
             logger.error(f"❌ 截图失败: {e}")
             return None
@@ -813,6 +977,8 @@ class WorkflowRunner:
         screenshot = self._get_screenshot_for_ocr()
         if screenshot is None:
             return False
+        
+        logger.info(f"🔍 Passing to OCR Engine. Type: {type(screenshot)}")
 
         try:
             result = self.ocr_engine(screenshot)
@@ -946,9 +1112,20 @@ class WorkflowRunner:
             # 即使 result 为空 (OCR没识别到任何文字)，也要进行 NotContains 判断
             all_text = ""
             if result:
-                all_text = " ".join(
-                    item[1] for item in result if item and len(item) >= 2
-                )
+                # V10.3: Robust text extraction (handle list/tuple/str)
+                extracted_texts = []
+                for item in result:
+                    if item and len(item) >= 2:
+                        # item[1] might be list or result object in some versions
+                        txt = item[1]
+                        if isinstance(txt, list):
+                            txt = " ".join(str(t) for t in txt)
+                        else:
+                            txt = str(txt)
+                        extracted_texts.append(txt)
+                all_text = " ".join(extracted_texts)
+            
+            logger.info(f"🔍 OCR Text: {all_text.strip()[:50]}...") # Log detected text for debug
             
             is_match = False
             if operator == "Contains":
@@ -1153,42 +1330,27 @@ class WorkflowRunner:
     def _action_input_text_base64(
         self, step: Dict[str, Any], row_data: Dict[str, Any]
     ) -> bool:
-        """V5.0: Input Text (Base64) - 通过 Magisk 剪贴板模块输入中文"""
-        import base64
+        """V5.0: Input Text (Base64) - Delegated to ActionLibrary"""
+        from core.action_library import ActionLibrary, StepData
         
-        coords = step.get("coords", {})
         params = step.get("params", "")
-        
-        # 变量替换/表达式求值
+        # Evaluate expression first (runner responsibility)
         text_to_input = self._evaluate_expression(params, row_data)
         
         if not text_to_input:
             logger.warning("⚠️ Input Text (Base64) 参数为空")
             return True
+
+        # Construct StepData for ActionLibrary
+        step_obj = StepData({
+            "action_type": "Input Text (Base64)",
+            "params": text_to_input, # Already evaluated
+            "coords": step.get("coords", {}),
+            "context": step.get("context", "")
+        })
         
-        # 先点击目标区域（激活输入框）
-        if coords:
-            px, py = self._calculate_click_point(coords)
-            self.device.click(px, py)
-            time.sleep(0.5)
-        
-        # Base64 编码
-        b64_text = base64.b64encode(text_to_input.encode('utf-8')).decode('utf-8')
-        
-        # 使用 Magisk 剪贴板模块写入
-        try:
-            self.device.shell(f'set_clip -b "{b64_text}"')
-            time.sleep(0.3)
-            
-            # 粘贴 (KEYCODE_PASTE = 279)
-            self.device.shell("input keyevent 279")
-            
-            logger.info(f"⌨️ 输入文本 (Base64): '{text_to_input}'")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Input Text (Base64) 失败: {e}")
-            return False
+        # Call static method
+        return ActionLibrary.action_input_text_base64(self.device, step_obj, self.variable_store)
 
     def _action_input_text_native(
         self, step: Dict[str, Any], row_data: Dict[str, Any]

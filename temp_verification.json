@@ -1,0 +1,52 @@
+[
+    {
+        "step_id": 1,
+        "step_name": "Test: Set Variable",
+        "action_type": "Set Variable",
+        "params": "TestVar = Hello World"
+    },
+    {
+        "step_id": 2,
+        "step_name": "Test: Print Variable",
+        "action_type": "Print Variable",
+        "params": "${TestVar}"
+    },
+    {
+        "step_id": 3,
+        "step_name": "Test: Wait Time",
+        "action_type": "Wait Time",
+        "params": "1"
+    },
+    {
+        "step_id": 4,
+        "step_name": "Test: Check Text (OCR)",
+        "action_type": "Check Text",
+        "params": "op:Contains|Settings",
+        "is_optional": true
+    },
+    {
+        "step_id": 5,
+        "step_name": "Test: IF Logic",
+        "action_type": "IF (Check Text)",
+        "params": "op:Contains|NonExistentText",
+        "is_optional": true
+    },
+    {
+        "step_id": 6,
+        "step_name": "Test: Inside IF (Should Skip)",
+        "action_type": "Print Variable",
+        "params": "Inside IF - Should NOT see this"
+    },
+    {
+        "step_id": 7,
+        "step_name": "Test: END IF",
+        "action_type": "END IF"
+    },
+    {
+        "step_id": 8,
+        "step_name": "Test: Load Excel Data (Mock)",
+        "action_type": "Load Excel Data",
+        "params": "dummy.xlsx -> ${ExcelData}",
+        "is_optional": true
+    }
+]

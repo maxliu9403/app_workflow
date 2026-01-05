@@ -1,6 +1,7 @@
 import re
 import time
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -20,15 +21,20 @@ from extension_manager import ExtensionManager
 
 # Import from core module for better code organization
 from core.models import RoiPct, WorkflowNode
-from core.constants import ACTION_CATEGORIES, NODE_STYLES, NODE_PARAM_SHORTCUTS, LOGIC_ACTIONS
+from core.constants import (
+    ACTION_CATEGORIES, NODE_STYLES, NODE_PARAM_SHORTCUTS, LOGIC_ACTIONS,
+    ACTION_PARAM_TEMPLATES, ACTION_PLACEHOLDERS  # V10.2
+)
 
 # Import Mixins for modular code organization
 from gui.device_mixin import DeviceMixin
 from gui.live_debugger_mixin import LiveDebuggerMixin
 from gui.workflow_designer_mixin import WorkflowDesignerMixin
+from gui.inspector_mixin import InspectorMixin
+from gui.code_export_mixin import CodeExportMixin  # V10.4: Code Export
 
 
-class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMixin):
+class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMixin, InspectorMixin, CodeExportMixin):
     BASE_WIDTH = 1080
     BASE_HEIGHT = 2400
 
@@ -356,6 +362,63 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
         except Exception as e:
             self.log(f"[Global] Load failed: {e}")
 
+    def _refresh_variable_watcher(self):
+        """V10.0: Refresh Variable Watcher TreeView with current variables"""
+        if not hasattr(self, 'var_watcher_tree'):
+            return
+        
+        # Clear existing items
+        for item in self.var_watcher_tree.get_children():
+            self.var_watcher_tree.delete(item)
+        
+        # Collect variables from multiple sources
+        all_vars = {}
+        
+        # 1. Global variables
+        if hasattr(self, 'global_vars') and self.global_vars:
+            all_vars.update(self.global_vars)
+        
+        # 2. Runtime VariableStore (if workflow runner is active)
+        if hasattr(self, 'workflow_runner') and self.workflow_runner:
+            if hasattr(self.workflow_runner, 'variable_store'):
+                runtime_vars = self.workflow_runner.variable_store.variables
+                all_vars.update(runtime_vars)
+        
+        # 3. Device ID (if connected)
+        if self.device:
+            all_vars["DeviceID"] = self.device.serial
+        
+        # Populate TreeView
+        for key, value in sorted(all_vars.items()):
+            # Determine type
+            val_type = type(value).__name__
+            if val_type == "str":
+                val_type = "str"
+            elif val_type in ("int", "float"):
+                val_type = val_type
+            elif val_type == "list":
+                val_type = "list"
+            elif val_type == "dict":
+                val_type = "dict"
+            elif val_type == "bool":
+                val_type = "bool"
+            else:
+                val_type = "?"
+            
+            # Truncate long values for display
+            display_val = str(value)
+            if len(display_val) > 40:
+                display_val = display_val[:37] + "..."
+            
+            self.var_watcher_tree.insert(
+                "",
+                "end",
+                values=(key, val_type, display_val)
+            )
+        
+        self.log(f"[VarWatcher] Refreshed: {len(all_vars)} variables")
+
+
     def _remove_http_kv_row(self, row_widget):
         # Remove from list
         self.http_kv_rows = [r for r in self.http_kv_rows if r[2] != row_widget]
@@ -453,10 +516,14 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
             if action_type == "HTTP Request":
                 self.http_prop_frame.grid()
                 if hasattr(self, 'gen_param_frame'):
-                    self.gen_param_frame.grid_remove()
+                    # Hide dynamic inspector container for HTTP special case
+                    self.gen_param_frame.grid_remove() 
             else:
                 self.http_prop_frame.grid_remove()
-                if hasattr(self, 'gen_param_frame'):
+                if hasattr(self, 'inspector_container'):
+                    self.inspector_container.grid()
+                elif hasattr(self, 'gen_param_frame'):
+                    # Fallback
                     self.gen_param_frame.grid()
         
         # 1. 控制坐标区域显示
@@ -1195,7 +1262,13 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
             step_frame,
             text="📌 配置",
             font=ctk.CTkFont(size=14, weight="bold"),
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=2)
+        ).grid(row=0, column=0, columnspan=1, sticky="w", padx=5, pady=2)
+        
+        # V10.4: Code Export Button (Action Bar)
+        # Using a small frame for buttons if needed
+        action_bar = ctk.CTkFrame(step_frame, fg_color="transparent")
+        action_bar.grid(row=0, column=1, sticky="e", padx=2, pady=2)
+        self._build_code_export_ui(action_bar)
 
         ctk.CTkLabel(step_frame, text="序号:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
         self.gen_step_entry = ctk.CTkEntry(step_frame, textvariable=self.gen_step_var, width=120)
@@ -1224,18 +1297,24 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
         )
         self.gen_action_combo.grid(row=3, column=1, sticky="ew", padx=5, pady=2)
 
-        # 动作参数
+        # 动作参数 (Dynamic Inspector)
+        # V10.3: Dynamic Inspector Container (Replaces gen_param_frame for UI display)
+        self.inspector_container = ctk.CTkFrame(self.left_panel, fg_color="transparent")
+        self.inspector_container.grid(row=2, column=0, sticky="nsew", padx=2, pady=2)
+        self.inspector_container.grid_columnconfigure(0, weight=1)
+        
+        # Build Dynamic UI inside the container
+        self._build_inspector_ui(self.inspector_container)
+
+        # Legacy Param Frame (Kept hidden for backward compat of widget references)
         self.gen_param_frame = ctk.CTkFrame(self.left_panel)
-        self.gen_param_frame.grid(row=2, column=0, sticky="ew", padx=2, pady=2)
-        self.gen_param_frame.grid_columnconfigure(1, weight=1)
+        # self.gen_param_frame.grid() # NEVER GRID THIS - Hides legacy clutter
+        
+        # Legacy components kept for code compatibility (referenced in other methods)
+        self.gen_param_entry = ctk.CTkEntry(self.left_panel) # Dummy
+        self.gen_operator_combo = ctk.CTkComboBox(self.left_panel, values=[]) # Dummy
 
-        ctk.CTkLabel(
-            self.gen_param_frame,
-            text="📝 参数",
-            font=ctk.CTkFont(size=14, weight="bold"),
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=2)
-
-        # V8.3: specialized HTTP Inspector
+        # V8.3: specialized HTTP Inspector (Hidden by default, integrated later?)
         self._build_http_inspector(self.left_panel)
         self.http_prop_frame.grid(row=3, column=0, sticky="ew", padx=2, pady=2)
         self.http_prop_frame.grid_remove() # Default hidden
@@ -1261,46 +1340,45 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
         self.gen_operator_combo.grid_remove() # 默认隐藏
         self.gen_operator_label.grid_remove()
 
+        # V10.2: 模板下拉框 - 帮助用户快速填写参数
+        self.gen_template_label = ctk.CTkLabel(self.gen_param_frame, text="📝 模板:", font=ctk.CTkFont(size=11))
+        self.gen_template_label.grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        
+        self.gen_template_var = ctk.StringVar(value="-- 选择模板 --")
+        self.gen_template_combo = ctk.CTkComboBox(
+            self.gen_param_frame,
+            variable=self.gen_template_var,
+            values=["-- 选择模板 --"],
+            width=220,
+            command=self._on_template_selected,
+            state="readonly"
+        )
+        self.gen_template_combo.grid(row=4, column=1, sticky="ew", padx=5, pady=2)
+        
+        # 存储当前模板映射 {"label": "template_content"}
+        self._current_templates: Dict[str, str] = {}
+
         self.gen_param_label = ctk.CTkLabel(self.gen_param_frame, text="值:")
-        self.gen_param_label.grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        self.gen_param_label.grid(row=5, column=0, sticky="w", padx=5, pady=2)
         self.gen_param_entry = ctk.CTkEntry(
             self.gen_param_frame,
             textvariable=self.gen_param_var,
             placeholder_text="Enter value...",
         )
-        self.gen_param_entry.grid(row=4, column=1, sticky="ew", padx=(5, 35), pady=2)
+        self.gen_param_entry.grid(row=5, column=1, sticky="ew", padx=(5, 35), pady=2)
         
         self.gen_param_browse_btn = ctk.CTkButton(
             self.gen_param_frame, text="📂", width=30, height=24, fg_color="#444",
             command=self._browse_param_image
         )
-        self.gen_param_browse_btn.grid(row=4, column=1, sticky="e", padx=2, pady=2)
+        self.gen_param_browse_btn.grid(row=5, column=1, sticky="e", padx=2, pady=2)
         self.gen_param_browse_btn.grid_remove() # Default hidden
 
-        ctk.CTkLabel(self.gen_param_frame, text="备注:").grid(row=5, column=0, sticky="nw", padx=5, pady=2)
+        ctk.CTkLabel(self.gen_param_frame, text="备注:").grid(row=6, column=0, sticky="nw", padx=5, pady=2)
         self.gen_context_text = ctk.CTkTextbox(self.gen_param_frame, height=50, font=ctk.CTkFont(size=12))
-        self.gen_context_text.grid(row=5, column=1, sticky="ew", padx=5, pady=2)
-
-        # V6.0: 变量快捷插入行
-        var_label_frame = ctk.CTkFrame(self.gen_param_frame, fg_color="transparent")
-        var_label_frame.grid(row=6, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
+        self.gen_context_text.grid(row=6, column=1, sticky="ew", padx=5, pady=2)
         
-        ctk.CTkLabel(var_label_frame, text="变量:", font=ctk.CTkFont(size=11)).pack(side="left")
-        ctk.CTkButton(
-            var_label_frame, text="📂", width=24, height=20, fg_color="#444",
-            command=self._select_excel_path
-        ).pack(side="left", padx=5)
-        ctk.CTkButton(
-            var_label_frame, text="{x}", width=40, height=20, fg_color="#555",
-            command=self._show_variable_menu
-        ).pack(side="right")
-        
-        # 变量按钮容器
-        self.gen_var_frame = ctk.CTkFrame(self.gen_param_frame, fg_color="#2a2a2a")
-        self.gen_var_frame.grid(row=7, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
-        
-        # 初始化变量按钮
-        self._load_variable_buttons()
+        # V10.2: Variable buttons removed - now using node-based data approach
 
 
 
@@ -1313,7 +1391,72 @@ class VintedAutomationConsole(DeviceMixin, LiveDebuggerMixin, WorkflowDesignerMi
             text_color="#888888",
             font=ctk.CTkFont(size=11),
         )
-        self.orch_hint_label.grid(row=5, column=0, sticky="ew", padx=10, pady=(10, 20))
+        self.orch_hint_label.grid(row=5, column=0, sticky="ew", padx=10, pady=(10, 5))
+
+        # === V10.0: Variable Watcher ===
+        var_watcher_frame = ctk.CTkFrame(self.left_panel)
+        var_watcher_frame.grid(row=6, column=0, sticky="nsew", padx=2, pady=2)
+        var_watcher_frame.grid_rowconfigure(1, weight=1)
+        var_watcher_frame.grid_columnconfigure(0, weight=1)
+        self.left_panel.grid_rowconfigure(6, weight=1)  # Make watcher expandable
+
+        var_header = ctk.CTkFrame(var_watcher_frame, fg_color="transparent")
+        var_header.pack(fill="x", padx=5, pady=2)
+        
+        ctk.CTkLabel(
+            var_header,
+            text="👁️ 变量监视器",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(side="left")
+        
+        self.var_watcher_refresh_btn = ctk.CTkButton(
+            var_header,
+            text="🔄",
+            width=28, height=24,
+            fg_color="#444",
+            command=self._refresh_variable_watcher
+        )
+        self.var_watcher_refresh_btn.pack(side="right", padx=2)
+
+        # TreeView for variables
+        var_tree_container = ctk.CTkFrame(var_watcher_frame, fg_color="#1e1e1e")
+        var_tree_container.pack(fill="both", expand=True, padx=5, pady=5)
+
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure(
+            "VarWatcher.Treeview",
+            background="#1e1e1e",
+            foreground="#e0e0e0",
+            fieldbackground="#1e1e1e",
+            rowheight=22,
+            font=("Consolas", 10)
+        )
+        style.configure(
+            "VarWatcher.Treeview.Heading",
+            background="#333",
+            foreground="#fff",
+            font=("Segoe UI", 10, "bold")
+        )
+
+        self.var_watcher_tree = ttk.Treeview(
+            var_tree_container,
+            columns=("key", "type", "value"),
+            show="headings",
+            height=6,
+            style="VarWatcher.Treeview"
+        )
+        self.var_watcher_tree.heading("key", text="Key")
+        self.var_watcher_tree.heading("type", text="Type")
+        self.var_watcher_tree.heading("value", text="Value")
+        self.var_watcher_tree.column("key", width=80, anchor="w")
+        self.var_watcher_tree.column("type", width=50, anchor="center")
+        self.var_watcher_tree.column("value", width=100, anchor="w")
+        
+        var_scroll = ttk.Scrollbar(var_tree_container, orient="vertical", command=self.var_watcher_tree.yview)
+        self.var_watcher_tree.configure(yscrollcommand=var_scroll.set)
+        var_scroll.pack(side="right", fill="y")
+        self.var_watcher_tree.pack(side="left", fill="both", expand=True)
 
         # ==================== 中间：节点画布区 (Viewport) ====================
         self.center_panel = ctk.CTkFrame(self.tab_designer)
@@ -3077,6 +3220,9 @@ offset_from_anchor: [{offset_x}, {offset_y}]  # 像素偏移量 (从锚点A到�
         self.gen_action_combo.configure(values=actions)
         if actions:
             self.gen_action_var.set(actions[0])
+            # V10.2: 同时更新模板下拉框
+            if hasattr(self, '_update_templates_for_action'):
+                self._update_templates_for_action(actions[0])
 
     def _find_category_for_action(self, action: str) -> str:
         """V5.0: 根据动作类型反查所属类别"""
@@ -3087,43 +3233,61 @@ offset_from_anchor: [{offset_x}, {offset_y}]  # 像素偏移量 (从锚点A到�
 
     # ==================== V6.0: 变量插入功能 ====================
 
-    def _load_excel_headers(self) -> list:
-        """V6.0: 尝试从 Excel 读取表头作为变量名"""
-        try:
-            import pandas as pd
-            from pathlib import Path
-            
-            # 尝试多个可能的数据文件路径
-            paths = []
-            if self.excel_path and Path(self.excel_path).exists():
-                paths.append(Path(self.excel_path))
-                
-            paths.extend([
-                Path(__file__).parent / "data" / "output.xlsx",
-                Path(__file__).parent / "output.xlsx",
-                Path(__file__).parent / "data.xlsx",
-            ])
-            
-            for p in paths:
-                if p.exists():
-                    df = pd.read_excel(p, nrows=0)
-                    return list(df.columns)
-            
-            return []
-        except Exception:
-            return []
+    # V10.2: Removed Excel-related methods (now using node-based data approach):
+    # - _get_col_letter (removed)
+    # - _load_excel_headers (removed)
+    # - _select_excel_path (removed)
+    # - _load_variable_buttons (removed)
+    # - _create_tooltip (removed)
+    # - _show_variable_menu (removed)
 
-    def _select_excel_path(self):
-        """Select Custom Excel File"""
-        path = filedialog.askopenfilename(
-            title="Select Excel Data",
-            filetypes=[("Excel Files", "*.xlsx;*.xls")]
-        )
-        if path:
-            self.excel_path = path
-            self._load_variable_buttons()
-            messagebox.showinfo("Info", f"Selected: {Path(path).name}")
+    # ==================== V10.2: 参数模板系统 ====================
 
+    def _on_template_selected(self, selected: str) -> None:
+        """V10.2: 当用户选择模板时，填充参数输入框"""
+        if selected == "-- 选择模板 --" or not selected:
+            return
+        
+        # 从映射中获取模板内容
+        template_content = self._current_templates.get(selected, "")
+        if template_content:
+            self.gen_param_var.set(template_content)
+            self.gen_log(f"📝 已应用模板: {selected}")
+        
+        # 重置下拉框显示
+        self.gen_template_var.set("-- 选择模板 --")
+
+    def _update_templates_for_action(self, action: str) -> None:
+        """V10.2: 根据动作类型更新模板下拉框和占位提示"""
+        # 清理动作名称（移除中文注释）
+        clean_action = action.split(' (')[0].strip()
+        
+        # 更新模板下拉框
+        templates = ACTION_PARAM_TEMPLATES.get(clean_action, [])
+        self._current_templates.clear()
+        
+        if templates:
+            labels = ["-- 选择模板 --"]
+            for desc, content, _ in templates:
+                label = f"{desc}"
+                labels.append(label)
+                self._current_templates[label] = content
+            
+            self.gen_template_combo.configure(values=labels)
+            self.gen_template_var.set("-- 选择模板 --")
+            self.gen_template_label.grid()
+            self.gen_template_combo.grid()
+        else:
+            self.gen_template_combo.configure(values=["-- 无可用模板 --"])
+            self.gen_template_var.set("-- 无可用模板 --")
+            # 对于没有模板的动作，可选择隐藏
+            # self.gen_template_label.grid_remove()
+            # self.gen_template_combo.grid_remove()
+        
+        # 更新占位提示文本
+        placeholder = ACTION_PLACEHOLDERS.get(clean_action, "输入参数...")
+        self.gen_param_entry.configure(placeholder_text=placeholder)
+    
     def _browse_param_image(self):
         """Select Image for Parameter"""
         path = filedialog.askopenfilename(
@@ -3132,55 +3296,6 @@ offset_from_anchor: [{offset_x}, {offset_y}]  # 像素偏移量 (从锚点A到�
         )
         if path:
             self.gen_param_var.set(path)
-
-    def _load_variable_buttons(self) -> None:
-        """V6.0: 加载变量快捷按钮 (Grid Layout)"""
-        # 清除旧按钮
-        for widget in self.gen_var_frame.winfo_children():
-            widget.destroy()
-        
-        # 默认变量列表 (回退值)
-        default_vars = ["SKU", "Title", "Price", "Brand", "Size", "Color"]
-        
-        # 尝试从 Excel 读取
-        excel_vars = self._load_excel_headers()
-        variables = excel_vars if excel_vars else default_vars
-        
-        # Grid config
-        self.gen_var_frame.grid_columnconfigure((0, 1, 2), weight=1)
-
-        # 创建按钮
-        for i, var_name in enumerate(variables[:12]):  # 最多显示12个
-            btn = ctk.CTkButton(
-                self.gen_var_frame,
-                text=f"${{{var_name}}}",
-                width=60,
-                height=24,
-                fg_color="#3a3a3a",
-                hover_color="#555",
-                font=ctk.CTkFont(size=11),
-                command=lambda v=var_name: self._insert_variable(v)
-            )
-            # 3 Columns
-            btn.grid(row=i // 3, column=i % 3, padx=1, pady=1, sticky="ew")
-
-    def _show_variable_menu(self) -> None:
-        """V6.0: 显示变量选择菜单"""
-        menu = tk.Menu(self.root, tearoff=0)
-        
-        # 默认变量 + Excel 变量
-        default_vars = ["SKU", "Title", "Price", "Brand", "Size", "Color", "Description"]
-        excel_vars = self._load_excel_headers()
-        
-        all_vars = list(dict.fromkeys(excel_vars + default_vars))  # 去重保持顺序
-        
-        for var_name in all_vars:
-            menu.add_command(
-                label=f"${{{var_name}}}",
-                command=lambda v=var_name: self._insert_variable(v)
-            )
-        
-        menu.post(self.root.winfo_pointerx(), self.root.winfo_pointery())
 
     def _insert_variable(self, var_name: str) -> None:
         """V6.0: 将变量插入到参数输入框"""

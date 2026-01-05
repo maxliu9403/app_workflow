@@ -35,8 +35,12 @@ ACTION_CATEGORIES: Dict[str, Dict[str, Dict[str, str]]] = {
         # V6.0: LOOP 节点
         "LOOP (Count)": {"icon": "🔁", "color": "#7C4DFF", "label": "循环(次数)"},
         "LOOP (Until Text)": {"icon": "🔁", "color": "#651FFF", "label": "循环(直到文字)"},
+        "LOOP LIST": {"icon": "📜", "color": "#536DFE", "label": "遍历列表"},  # V10.0
         "BREAK": {"icon": "⏹️", "color": "#D500F9", "label": "跳出循环"},
         "END LOOP": {"icon": "🔚", "color": "#AA00FF", "label": "循环结束"},
+        # V10.0: Variable Actions
+        "Set Variable": {"icon": "📝", "color": "#00C853", "label": "设置变量"},
+        "Print Variable": {"icon": "💬", "color": "#64DD17", "label": "打印变量"},
     },
     "⚙️ System": {
         "Wait Time": {"icon": "⏱️", "color": "#607D8B", "label": "等待时间"},
@@ -44,12 +48,17 @@ ACTION_CATEGORIES: Dict[str, Dict[str, Dict[str, str]]] = {
     "🌐 Network": {
         "HTTP Request": {"icon": "🌐", "color": "#3F51B5", "label": "HTTP请求"},
     },
+    # V10.2: Data Processing Category
+    "📊 Data Processing": {
+        "Load Excel Data": {"icon": "📊", "color": "#217346", "label": "读取Excel数据"},
+    },
 }
 
 # 逻辑节点列表（不执行人类延迟）
 LOGIC_ACTIONS: Set[str] = {
     "IF (Check Text)", "IF (Check Image)", "ELSE", "END IF",
-    "LOOP (Count)", "LOOP (Until Text)", "BREAK", "END LOOP"
+    "LOOP (Count)", "LOOP (Until Text)", "LOOP LIST", "BREAK", "END LOOP",
+    "Set Variable", "Print Variable"  # V10.0: Variable Actions
 }
 
 # 兼容 V4: 扁平化 NODE_STYLES
@@ -101,4 +110,118 @@ NODE_PARAM_SHORTCUTS: Dict[str, List[Tuple[str, str]]] = {
     "Check Image": [
         ("0.8", "相似度0.8"), ("0.9", "相似度0.9"), ("0.95", "相似度0.95")
     ]
+}
+
+# V10.2: 动作参数模板库 - 帮助用户快速填写正确格式
+# 结构: { "动作名称": [ ("模板描述", "模板内容", "占位提示"), ... ] }
+ACTION_PARAM_TEMPLATES: Dict[str, List[Tuple[str, str, str]]] = {
+    # === Wait Time ===
+    "Wait Time": [
+        ("1秒延迟", "1", "秒数 或 random:1-3"),
+        ("2秒延迟", "2", ""),
+        ("随机延迟", "random:1-3", "格式: random:最小-最大"),
+        ("自定义随机", "random:2-5", ""),
+    ],
+    # === Check Text ===
+    "Check Text": [
+        ("包含文字", "Success", "要检测的文字"),
+        ("完全匹配", "op:Equals|登录成功", "op:Equals|要匹配的文字"),
+        ("不包含", "op:NotContains|错误", "op:NotContains|不含的文字"),
+        ("捕获到变量", "价格: (\\d+) -> ${Price}", "正则 -> ${变量名}"),
+    ],
+    # === Input Text ===
+    "Input Text (Base64)": [
+        ("固定文本", "Hello World", "要输入的文本"),
+        ("变量输入", "${Password}", "${变量名}"),
+        ("中文输入", "你好世界", "支持中文"),
+    ],
+    "Input Text (Native)": [
+        ("英文/数字", "user123", "ASCII字符"),
+        ("变量输入", "${Username}", "${变量名}"),
+    ],
+    # === Set Variable ===
+    "Set Variable": [
+        ("简单赋值", "Name = John", "Key = Value"),
+        ("数学计算", "Price = eval: float(${A}) * 0.8", "Key = eval: 表达式"),
+        ("定义列表", "MyList = eval: [1, 2, 3]", "Key = eval: [...]"),
+        ("字符串拼接", "Full = eval: ${First} + ' ' + ${Last}", ""),
+    ],
+    # === Print Variable ===
+    "Print Variable": [
+        ("打印单个", "${MyVar}", "${变量名}"),
+        ("打印全部", "", "留空打印所有变量"),
+    ],
+    # === LOOP LIST ===
+    "LOOP LIST": [
+        ("遍历列表", "${ImageList} as ${Item}", "${列表} as ${项}"),
+    ],
+    # === LOOP (Count) ===
+    "LOOP (Count)": [
+        ("循环3次", "3", "次数"),
+        ("循环5次", "5", ""),
+        ("变量次数", "${Count}", "${变量名}"),
+    ],
+    # === LOOP (Until Text) ===
+    "LOOP (Until Text)": [
+        ("直到出现", "加载完成", "目标文字"),
+        ("变量目标", "${TargetText}", "${变量名}"),
+    ],
+    # === Wait Text ===
+    "Wait Text": [
+        ("等待文字", "加载中", "要等待的文字"),
+        ("超时设置", "Home|timeout=30", "文字|timeout=秒数"),
+    ],
+    # === Click Text ===
+    "Click Text": [
+        ("点击按钮", "确定", "要点击的文字"),
+        ("变量文字", "${ButtonText}", "${变量名}"),
+    ],
+    # === HTTP Request ===
+    "HTTP Request": [
+        ("GET请求", '{"url": "https://api.example.com", "method": "GET"}', "JSON参数"),
+        ("POST请求", '{"url": "https://api.example.com", "method": "POST", "body": {"key": "${Value}"}}', ""),
+    ],
+    # === IF (Check Text) ===
+    "IF (Check Text)": [
+        ("如果包含", "登录成功", "条件文字"),
+        ("如果不含", "op:NotContains|错误", "op:NotContains|文字"),
+    ],
+    # === Swipe ===
+    "Swipe": [
+        ("正常滑动", "1.0", "持续时间(秒)"),
+        ("快速滑动", "0.3", ""),
+        ("慢速滑动", "2.0", ""),
+    ],
+    # === V10.2: Load Excel Data ===
+    "Load Excel Data": [
+        ("读取本地文件", "D:\\data.xlsx -> ${ExcelRows}", "路径 -> ${变量名}"),
+        ("读取相对路径", "data/products.xlsx -> ${Products}", "相对路径 -> ${变量名}"),
+        ("使用变量路径", "${ProjectDir}/config.xlsx -> ${Config}", "${路径变量} -> ${变量名}"),
+    ],
+}
+
+# V10.2: 动作占位提示文本
+ACTION_PLACEHOLDERS: Dict[str, str] = {
+    "Wait Time": "秒数 (如: 2) 或 random:最小-最大",
+    "Check Text": "文字 或 op:操作符|文字 或 正则 -> ${变量}",
+    "Input Text (Base64)": "要输入的文本 (支持中文)",
+    "Input Text (Native)": "英文/数字文本 或 ${变量}",
+    "Set Variable": "Key = Value 或 Key = eval: 表达式",
+    "Print Variable": "${变量名} 或留空打印全部",
+    "LOOP LIST": "${列表变量} as ${迭代项}",
+    "LOOP (Count)": "循环次数",
+    "LOOP (Until Text)": "目标文字 (出现后停止)",
+    "Wait Text": "要等待出现的文字",
+    "Click Text": "要点击的文字内容",
+    "Click Region": "无需参数 (使用坐标)",
+    "Swipe": "滑动持续时间(秒)",
+    "Long Press": "长按持续时间(秒)",
+    "HTTP Request": "JSON格式: {url, method, body...}",
+    "IF (Check Text)": "条件文字 或 op:操作符|文字",
+    "ELSE": "无需参数",
+    "END IF": "无需参数",
+    "BREAK": "无需参数",
+    "END LOOP": "无需参数",
+    # V10.2: Data Processing
+    "Load Excel Data": "Excel路径 -> ${变量名}",
 }
